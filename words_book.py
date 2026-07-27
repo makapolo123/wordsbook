@@ -121,7 +121,7 @@ def start_review():
                     current_word["proficiency"] = 90
                     break
                 else:
-                    print("输入错误！请重新输入")
+                    print("输入错误！请重新输入！")
 
         #'2' 不认识
         elif select == '2':
@@ -130,7 +130,7 @@ def start_review():
             current_word["proficiency"] = max(MIN_PRO, current_word["proficiency"] - SUB_POINT)
 
         else:
-            print("输入错误!请重新输入")
+            print("输入错误!请重新输入！")
             continue
     save_words()
 
@@ -153,7 +153,7 @@ def main_menu():
             print("已保存所有进度，程序关闭！")
             break
         else:
-            print("输入无效，请重新选择！")
+            print("输入无效，请重新输入！")
 
 if __name__ == "__main__":
     main_menu()
