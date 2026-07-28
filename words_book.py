@@ -66,7 +66,7 @@ def pick_random_word():
     weight_list = []
     for word in words_data:
         #熟练度越低，权重越大
-        weight = 100 - word["proficiency"]
+        weight = 90 - word["proficiency"]
         weight_list.append(weight)
     #按权重抽取1个单词
     target_word = random.choices(words_data, weights=weight_list, k=1)[0]
@@ -122,6 +122,7 @@ def start_review():
                     break
                 else:
                     print("输入错误！请重新输入！")
+                    continue
 
         #'2' 不认识
         elif select == '2':
