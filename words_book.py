@@ -115,7 +115,7 @@ def start_review():
                     break
                 #已经记牢了，直接将熟练度改为达标值，后续不再出现
                 elif next_act == '3':
-                    current_word["proficiency"] = 90
+                    current_word["proficiency"] = STD_SCORE
                     break
                 else:
                     print("输入错误！请重新输入！")
