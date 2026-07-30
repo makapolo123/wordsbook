@@ -42,12 +42,8 @@ def import_txt(file_path):
             eng = eng.strip()
             chn = chn.strip()
             #判断单词是否已经存在
-            is_exist = False
-            for w in words_data:
-                if w["en"] == eng:
-                    is_exist = True
-                    break
-            if not is_exist:
+            exists = {w["en"] for w in words_data}
+            if eng not in exists:
                 new_word = {
                     "en" : eng,
                     "cn" : chn,
@@ -66,7 +62,8 @@ def pick_random_word():
     weight_list = []
     for word in words_data:
         #熟练度越低，权重越大
-        weight = 90 - word["proficiency"]
+        raw = MAX_PRO - word["proficiency"]
+        weight = max(1, raw ** 2)
         weight_list.append(weight)
     #按权重抽取1个单词
     target_word = random.choices(words_data, weights=weight_list, k=1)[0]
@@ -106,23 +103,23 @@ def start_review():
         #'1' 认识
         elif select == '1':
             print(f"释义：{current_word['cn']}")
-            next = input("操作指令：1=下一个  2=记错了  3=记住了：").strip()
+            next_act = input("操作指令：1=下一个  2=记错了  3=记住了：").strip()
             while True:
                 #熟练度增加，最高不能超过MAX_PRO
-                if next == '1':
+                if next_act == '1':
                     current_word["proficiency"] = min(MAX_PRO, current_word["proficiency"] + ADD_POINT)
                     break
-                #熟练度减少，最低不能小于0
-                elif next == '2':
+                #熟练度减少，最低不能小于MIN_PRO
+                elif next_act == '2':
                     current_word["proficiency"] = max(MIN_PRO, current_word["proficiency"] - SUB_POINT)
                     break
                 #已经记牢了，直接将熟练度改为达标值，后续不再出现
-                elif next == '3':
+                elif next_act == '3':
                     current_word["proficiency"] = 90
                     break
                 else:
                     print("输入错误！请重新输入！")
-                    continue
+                    next_act = input("操作指令：1=下一个  2=记错了  3=记住了：").strip()
 
         #'2' 不认识
         elif select == '2':
@@ -132,7 +129,6 @@ def start_review():
 
         else:
             print("输入错误!请重新输入！")
-            continue
     save_words()
 
 #主菜单函数
