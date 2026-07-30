@@ -2,6 +2,7 @@ import json
 import random
 
 SAVE_FILE = "words.json"
+STD_SCORE = 90
 MAX_PRO = 100
 MIN_PRO = 50
 ADD_POINT = 10
@@ -62,8 +63,7 @@ def pick_random_word():
     weight_list = []
     for word in words_data:
         #熟练度越低，权重越大
-        raw = MAX_PRO - word["proficiency"]
-        weight = max(1, raw ** 2)
+        weight = max(0, MAX_PRO - word["proficiency"])
         weight_list.append(weight)
     #按权重抽取1个单词
     target_word = random.choices(words_data, weights=weight_list, k=1)[0]
@@ -71,9 +71,9 @@ def pick_random_word():
 
 #判断所有单词是否达标
 def all_word_finish():
-    """判断所有单词熟练度是否都超过90"""
+    """判断所有单词熟练度是否都超过STD_SCORE"""
     for word in words_data:
-        if word["proficiency"] < 90:
+        if word["proficiency"] < STD_SCORE:
             return False
     return True
 
