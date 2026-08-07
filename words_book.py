@@ -1,5 +1,6 @@
 import json
 import random
+import time
 
 SAVE_FILE = "words.json"
 STD_SCORE = 90  #达标熟练度
@@ -8,7 +9,7 @@ MIN_PRO = 50    #最小熟练度
 ADD_POINT = 10  #增加熟练度
 SUB_POINT = 8   #减少熟练度
 
-words_data = []
+words_data = []   # 单词列表
 
 #保存单词
 def save_words():
@@ -48,7 +49,8 @@ def import_txt(file_path):
                 new_word = {
                     "en" : eng,
                     "cn" : chn,
-                    "proficiency" : 50
+                    "proficiency" : 50,
+                    "last_review": 0  # 新增：最后复习时间
                 }
                 words_data.append(new_word)
 
@@ -59,15 +61,24 @@ def import_txt(file_path):
 
 #抽取单词
 def pick_random_word():
-    """根据熟练度加权随机抽取单词，熟练度越低越容易出现"""
-    weight_list = []
-    for word in words_data:
-        #熟练度越低，权重越大
-        weight = max(0, MAX_PRO - word["proficiency"])
-        weight_list.append(weight)
-    #按权重抽取1个单词
-    target_word = random.choices(words_data, weights=weight_list, k=1)[0]
-    return target_word
+    """根据复习时间间隔和熟练度加权随机抽取单词，复习时间间隔长的，熟练度越低越容易出现"""
+    now = time.time()
+    # 优先从未达标和长时间没复习的词中抽
+    candidates = [
+        word for word in words_data
+        if word["proficiency"] < STD_SCORE
+        and now - word.get("last_review", 0) > 120  # ← 至少隔1小时
+    ]
+    if candidates:
+        weight_list = []
+        for word in candidates:
+            #熟练度越低，权重越大
+            weight = max(0, MAX_PRO - word["proficiency"])
+            weight_list.append(weight)
+        #按权重抽取1个单词
+        target_word = random.choices(candidates, weights=weight_list, k=1)[0]
+        return target_word
+    return random.choice(words_data)
 
 #判断所有单词是否达标
 def all_word_finish():
@@ -82,8 +93,10 @@ def start_review():
     if len(words_data) == 0:
         print("暂无单词，请先导入单词！")
         return
+    
     print("\n========== 单词背诵模式 ==========")
     print("操作指令：1=认识  2=不认识  0=退出背诵")
+
     while True:
         if all_word_finish():
             print("所有单词已达标！")
@@ -129,7 +142,10 @@ def start_review():
 
         else:
             print("输入错误!请重新输入！")
-    save_words()
+            continue
+        # 记录复习时间
+        current_word["last_review"] = time.time()
+        save_words()
 
 #主菜单函数
 def main_menu():
