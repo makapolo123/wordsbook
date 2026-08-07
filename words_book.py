@@ -2,11 +2,11 @@ import json
 import random
 
 SAVE_FILE = "words.json"
-STD_SCORE = 90
-MAX_PRO = 100
-MIN_PRO = 50
-ADD_POINT = 10
-SUB_POINT = 8
+STD_SCORE = 90  #达标熟练度
+MAX_PRO = 100   #最大熟练度
+MIN_PRO = 50    #最小熟练度
+ADD_POINT = 10  #增加熟练度
+SUB_POINT = 8   #减少熟练度
 
 words_data = []
 
