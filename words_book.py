@@ -29,7 +29,7 @@ def load_words():
 
 # 导入单词
 def import_txt(file_path):
-    """导入txt单词文件（格式：英文，中文\n）"""
+    """导入txt单词文件（格式：英文, 中文\n）"""
     global words_data
     try:
         with open(file_path, "r", encoding="utf-8") as f:
@@ -50,7 +50,8 @@ def import_txt(file_path):
                     "en" : eng,
                     "cn" : chn,
                     "proficiency" : 50,
-                    "last_review": 0  # 新增：最后复习时间
+                    "last_review": 0,  # 最后复习时间
+                    "last_reduce" : 0   # 上次减少的熟练度
                 }
                 words_data.append(new_word)
 
@@ -59,17 +60,30 @@ def import_txt(file_path):
     except Exception as err:
         print("导入失败，错误：", err)
 
+# 冷却复习时间
 def get_cooldown(proficiency):
-    base_time = (proficiency / 100) * 900 - 330
-    # 加入 ±20% 的随机抖动
-    jitter = random.uniform(0.8, 1.2)
+    base_time = round((2.7 ** (proficiency / 100)) * 449, 1)   # 复习时间间隔，熟练度越高，复习时间间隔越长，范围2~8分钟
+    jitter = random.uniform(0.8, 1.2)    # 加入 ±20% 的随机抖动
     return int(base_time * jitter)
 
+# 熟练度遗忘衰减
+def forgetting_reduce():
+    """根据距离上次复习的时间，自然降低熟练度"""
+    now = time.time()
+    for word in words_data:
+        last = word.get("last_review", 0)
+        if last == 0 or word["proficiency"] == 101:
+            continue
+        reduce = max(0, (now - last) // 86400 * 2 - 1)     # 随着时间间隔变长而减少相应的熟练度
+        if reduce > word["last_reduce"]:
+            word["proficiency"] = max(MIN_PRO, word["proficiency"] - reduce)
+            word["last_reduce"] = reduce
+        
 # 抽取单词
 def pick_random_word():
     """根据复习时间间隔和熟练度加权随机抽取单词，复习时间间隔长的，熟练度越低越容易出现"""
     now = time.time()
-    # 优先从未达标和长时间没复习的词中抽
+    # 优先从长时间没复习的词中抽
     candidates = [
         word for word in words_data
         if word["proficiency"] < STD_SCORE
@@ -84,7 +98,11 @@ def pick_random_word():
         # 按权重抽取1个单词
         target_word = random.choices(candidates, weights=weight_list, k=1)[0]
         return target_word
-    return random.choice(words_data)
+    else:
+        while True:
+            target_word = random.choice(words_data)
+            if target_word["proficiency"] < MAX_PRO:
+                return target_word
 
 # 判断所有单词是否达标
 def all_word_finish():
@@ -104,6 +122,7 @@ def start_review():
     print("操作指令：1=认识  2=不认识  0=退出背诵")
 
     while True:
+        forgetting_reduce()
         if all_word_finish():
             print("所有单词已达标！")
             break
@@ -132,9 +151,9 @@ def start_review():
                 elif next_act == '2':
                     current_word["proficiency"] = max(MIN_PRO, current_word["proficiency"] - SUB_POINT)
                     break
-                # 已经记牢了，直接将熟练度改为达标值，后续不再出现
+                # 已经记牢了，将熟练度改为特殊值，后续不再出现
                 elif next_act == '3':
-                    current_word["proficiency"] = STD_SCORE
+                    current_word["proficiency"] = 101
                     break
                 else:
                     print("输入错误！请重新输入！")
@@ -151,6 +170,8 @@ def start_review():
             continue
         # 记录复习时间
         current_word["last_review"] = time.time()
+        # 减少的熟练度归零
+        current_word["reduce"] = 0
         save_words()
 
 # 主菜单函数
