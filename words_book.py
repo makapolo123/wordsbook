@@ -1,3 +1,4 @@
+import datetime
 import json
 import random
 import time
@@ -10,6 +11,11 @@ ADD_POINT = 10       # 增加熟练度
 SUB_POINT = 8        # 减少熟练度
 
 words_data = []   # 单词列表
+total_words = 0   # 抽取的单词数
+new_words = 0     # 新单词数
+remember_words = 0 # 记住的单词数
+start_time = 0
+end_time = 0
 
 # 保存单词
 def save_words():
@@ -129,6 +135,11 @@ def start_review():
 
         # 抽取单词
         current_word = pick_random_word()
+
+        total_words += 1
+        if current_word["last_review"] == 0:
+            new_words += 1
+
         print(f"\n[单词]{current_word['en']}")
         select = input("请输入你的选择：").strip()
 
@@ -146,6 +157,7 @@ def start_review():
                 # 熟练度增加，最高不能超过MAX_PRO
                 if next_act == '1':
                     current_word["proficiency"] = min(MAX_PRO, current_word["proficiency"] + ADD_POINT)
+                    remember_words += 1
                     break
                 # 熟练度减少，最低不能小于MIN_PRO
                 elif next_act == '2':
@@ -174,6 +186,14 @@ def start_review():
         current_word["reduce"] = 0
         save_words()
 
+def statistic_data():
+    with open("statistic_data.txt", "a", encoding="utf-8") as f:
+        f.write(f"复习时间：{datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}")
+        review_time = start_time - end_time
+        f.write(f"用时{int(review_time // 3600)}:{int(review_time % 3600 // 60)}:{review_time % 60}")
+        f.write("复习单词总数\t新单词数\t记住单词数\t正确率")
+        f.write(f"{total_words}")
+
 # 主菜单函数
 def main_menu():
     load_words()
@@ -187,8 +207,10 @@ def main_menu():
             file_path = input("请输入单词文件名称（例如 words.txt）：")
             import_txt(file_path)
         elif choice == "2":
+            start_time = time.time()
             start_review()
         elif choice == "3":
+            end_time = time.time()
             save_words()
             print("已保存所有进度，程序关闭！")
             break
