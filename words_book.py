@@ -150,6 +150,7 @@ def word_record(word_record_data):
 # 单词检测
 def start_review():
     global total_words
+    global new_words
     global remember_words
     global start_time
     global end_time
@@ -229,12 +230,17 @@ def start_review():
         final_proficiency = current_word["proficiency"]
         word_record([word_record_time, current_word["en"], current_word["cn"], initial_proficiency, final_proficiency, result])
         # 减少的熟练度归零
-        current_word["reduce"] = 0
+        current_word["last_reduce"] = 0
         save_words()
+
+def temp():
+    for word in words_data:
+        word.pop("reduce", None)
 
 # 主菜单函数
 def main_menu():
     load_words()
+    temp()
     while True:
         print("\n========== 单词记忆辅助程序 ==========")
         print("1. 导入单词txt文件")
