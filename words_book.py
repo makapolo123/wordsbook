@@ -125,14 +125,13 @@ def all_word_finish():
 def statistic_data():
     global review_time
     with open(STATISTIC_FILE, "a", encoding="utf-8") as f:
-        f.write(f"复习时间：{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}\n")
+        f.write(f"\n复习时间：{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}\n")
         review_time = int(end_time - start_time)
         f.write(f"用时：{int(review_time // 3600)}:{int(review_time % 3600 // 60)}:{int(review_time % 60)}\n")
         f.write(f"复习单词总数：{total_words}\n")
         f.write(f"新单词数：{new_words}\n")
         f.write(f"记住单词数：{remember_words}\n")
         f.write(f"正确率：{round(remember_words / total_words, 4)*100}%\n")
-        f.write("\n")
 
 # 复习的每个单词的情况
 def word_record(word_record_data):
@@ -233,14 +232,9 @@ def start_review():
         current_word["last_reduce"] = 0
         save_words()
 
-def temp():
-    for word in words_data:
-        word.pop("reduce", None)
-
 # 主菜单函数
 def main_menu():
     load_words()
-    temp()
     while True:
         print("\n========== 单词记忆辅助程序 ==========")
         print("1. 导入单词txt文件")
