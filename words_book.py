@@ -131,7 +131,7 @@ def statistic_data():
         f.write(f"复习单词总数：{total_words}\n")
         f.write(f"新单词数：{new_words}\n")
         f.write(f"记住单词数：{remember_words}\n")
-        f.write(f"正确率：{round(remember_words / total_words, 4)*100}%\n")
+        f.write(f"正确率：{round((remember_words / total_words)*100, 2)}%\n")
 
 # 复习的每个单词的情况
 def word_record(word_record_data):
@@ -246,7 +246,7 @@ def main_menu():
             import_txt(file_path)
         elif choice == "2":
             start_review()
-        elif choice == "3":        
+        elif choice == "3":
             save_words()
             print("已保存所有进度，程序关闭！")
             break
