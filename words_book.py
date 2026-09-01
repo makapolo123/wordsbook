@@ -14,11 +14,6 @@ ADD_POINT = 10       # 增加熟练度
 SUB_POINT = 8        # 减少熟练度
 
 words_data = []    # 单词列表
-total_words = 0    # 抽取的单词数
-new_words = 0      # 新单词数
-remember_words = 0 # 记住的单词数
-start_time = 0     # 复习开始时间
-end_time = 0       # 复习结束时间
 
 # 保存单词
 def save_words():
@@ -122,16 +117,16 @@ def all_word_finish():
     return True
 
 # 记录每次复习的数据
-def statistic_data():
-    global review_time
+def statistic_data(start_time, end_time, review_counts, remember_counts, review_words, new_words):
     with open(STATISTIC_FILE, "a", encoding="utf-8") as f:
-        f.write(f"\n复习时间：{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}\n")
+        f.write(f"\n复习时间：{datetime.fromtimestamp(start_time).strftime("%Y-%m-%d %H:%M:%S")}\n")
         review_time = int(end_time - start_time)
         f.write(f"用时：{int(review_time // 3600)}:{int(review_time % 3600 // 60)}:{int(review_time % 60)}\n")
-        f.write(f"复习单词总数：{total_words}\n")
+        f.write(f"复习单词次数：{review_counts}\n")
+        f.write(f"记住单词次数：{remember_counts}\n")
+        f.write(f"复习单词数：{len(review_words)}\n")
         f.write(f"新单词数：{new_words}\n")
-        f.write(f"记住单词数：{remember_words}\n")
-        f.write(f"正确率：{round((remember_words / total_words)*100, 2)}%\n")
+        f.write(f"正确率：{round((remember_counts / review_counts)*100, 2)}%\n")
 
 # 复习的每个单词的情况
 def word_record(word_record_data):
@@ -148,18 +143,15 @@ def word_record(word_record_data):
 
 # 单词检测
 def start_review():
-    global total_words
-    global new_words
-    global remember_words
-    global start_time
-    global end_time
+    review_counts = 0    # 复习单词次数
+    remember_counts = 0  # 记住单词次数
+    new_words = 0        # 新单词数
+    start_flag = False   # 开始复习标志
+    review_words = set() # 复习的单词
 
     if len(words_data) == 0:
         print("暂无单词，请先导入单词！")
         return
-    
-    start_time = time.time()
-    word_record_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
     print("\n========== 单词背诵模式 ==========")
     print("操作指令：1=认识  2=不认识  0=退出背诵")
@@ -170,8 +162,13 @@ def start_review():
             print("所有单词已达标！")
             break
 
+        if not start_flag:
+            start_time = time.time()  # 复习开始时间
+        start_flag = True
+        
         # 抽取单词
         current_word = pick_random_word()
+        word_record_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S") # 单个单词复习时间
 
         if current_word["last_review"] == 0:
             new_words += 1
@@ -182,8 +179,8 @@ def start_review():
         
         # ‘0’ 退出
         if select == '0':
-            end_time = time.time()
-            statistic_data()
+            end_time = time.time()  # 复习结束时间
+            statistic_data(start_time, end_time, review_counts, remember_counts,review_words, new_words)
             save_words()
             print("进度已保存，退出")
             break
@@ -196,7 +193,7 @@ def start_review():
                 # 熟练度增加，最高不能超过MAX_PRO
                 if next_act == '1':
                     current_word["proficiency"] = int(min(MAX_PRO, current_word["proficiency"] + ADD_POINT))
-                    remember_words += 1
+                    remember_counts += 1
                     result = "remembered"
                     break
                 # 熟练度减少，最低不能小于MIN_PRO
@@ -224,7 +221,8 @@ def start_review():
             print("输入错误!请重新输入！")
             continue
         # 记录复习情况
-        total_words += 1
+        review_counts += 1
+        review_words.add(current_word["en"])
         current_word["last_review"] = time.time()
         final_proficiency = current_word["proficiency"]
         word_record([word_record_time, current_word["en"], current_word["cn"], initial_proficiency, final_proficiency, result])
