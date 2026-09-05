@@ -87,6 +87,7 @@ def forgetting_reduce():
 def pick_random_word():
     """根据复习时间间隔和熟练度加权随机抽取单词，复习时间间隔长的，熟练度越低越容易出现"""
     now = time.time()
+    weight_list = [] # 单词权重
     # 优先从长时间没复习的词中抽
     candidates = [
         word for word in words_data
@@ -94,7 +95,6 @@ def pick_random_word():
         and now - word.get("last_review", 0) > get_cooldown(word["proficiency"])
     ]
     if candidates:
-        weight_list = []
         for word in candidates:
             # 熟练度越低，权重越大
             weight = max(0, MAX_PRO - word["proficiency"])
@@ -103,10 +103,15 @@ def pick_random_word():
         target_word = random.choices(candidates, weights=weight_list, k=1)[0]
         return target_word
     else:
-        while True:
-            target_word = random.choice(words_data)
-            if target_word["proficiency"] < MAX_PRO:
-                return target_word
+        for word in words_data:
+            if word["proficiency"] >= STD_SCORE:
+                continue
+            candidates.append(word)
+            # 熟练度越低，权重越大
+            weight = max(0, MAX_PRO - word["proficiency"])
+            weight_list.append(weight)
+            target_word = random.choices(candidates, weights=weight_list, k=1)[0]
+            return target_word
 
 # 判断所有单词是否达标
 def all_word_finish():
