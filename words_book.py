@@ -105,8 +105,8 @@ def pick_random_word():
     if candidates:
         for word in candidates:
             # 熟练度越低，权重越大
-            weight = max(0, MAX_PRO - word["proficiency"])
-            weight_list.append(weight)
+            weight = (MAX_PRO - word["proficiency"]) ** 2
+            weight_list.append(weight)      
         # 按权重抽取1个单词
         target_word = random.choices(candidates, weights=weight_list, k=1)[0]
         return target_word
@@ -116,7 +116,7 @@ def pick_random_word():
                 continue
             candidates.append(word)
             # 熟练度越低，权重越大
-            weight = max(0, MAX_PRO - word["proficiency"])
+            weight = (MAX_PRO - word["proficiency"]) ** 2
             weight_list.append(weight)
             target_word = random.choices(candidates, weights=weight_list, k=1)[0]
             return target_word
@@ -266,6 +266,6 @@ def main_menu():
             break
         else:
             print("输入无效，请重新输入！")
-
+            
 if __name__ == "__main__":
     main_menu()
