@@ -21,6 +21,12 @@ COOLDOWN_MAX_HOURS = 24.0   # 最高复习间隔（小时），对应最高熟�
 OVERDUE_FLOOR = 0.05        # 刚复习过的词的权重系数下限
 OVERDUE_CAP = 3.0           # 逾期很久的词的权重系数上限
 
+# ===== 难记词加成参数 =====
+HARD_RATE_THRESHOLD = 0.25  # 错误率低于该值不算难记词，权重不受影响
+HARD_BOOST = 10.0           # 错误率每超出阈值 0.05，权重就多 0.5 倍
+HARD_CAP = 4.0              # 难记加成倍率的上限
+HARD_MIN_REVIEWS = 4        # 复习次数少于该值不做难记判定
+
 words_data = []    # 单词列表
 
 # 保存单词
@@ -44,6 +50,7 @@ def load_words():
 def migrate_data():
     """为旧版存档补齐缺失字段，保证后续逻辑使用的字段统一存在"""
     changed = False
+    need_backfill = False
     for word in words_data:
         if "first_review" not in word:
             # 旧存档无此字段，用最后复习时间兜底（0 表示从未复习）
@@ -56,9 +63,46 @@ def migrate_data():
             # 已复习过的词至少记为 1 次
             word["review_count"] = 1 if word.get("last_review", 0) else 0
             changed = True
+        if "fail_count" not in word or "success_count" not in word:
+            # 首次出现对错次数，稍后从复习记录里回填历史
+            word.setdefault("fail_count", 0)
+            word.setdefault("success_count", 0)
+            need_backfill = True
+            changed = True
+    if need_backfill:
+        backfill_counts_from_record()
     if changed:
         save_words()
         print("检测到旧版存档，已自动补齐字段并保存")
+
+# 从复习记录回填历史对错次数
+def backfill_counts_from_record():
+    """读取 word_record.csv，统计每个词历史答对/答错的次数，
+    让难记词加成在功能上线当天就能生效"""
+    try:
+        with open(RECORD_DATA_FILE, "r", newline="", encoding="utf-8") as f:
+            rows = list(csv.reader(f))[1:]   # 第一行是表头
+    except FileNotFoundError:
+        return
+    except Exception as err:
+        print("回填历史对错次数失败：", err)
+        return
+
+    index = {word["en"]: word for word in words_data}
+    filled = 0
+    for row in rows:
+        if len(row) < 6:
+            continue
+        word = index.get(row[1])
+        if word is None:
+            continue
+        if row[5] == "forgotten":
+            word["fail_count"] += 1
+        else:
+            word["success_count"] += 1
+        filled += 1
+    if filled:
+        print(f"已从复习记录回填 {filled} 次历史结果")
 
 # 导入单词
 def import_txt(file_path):
@@ -87,7 +131,9 @@ def import_txt(file_path):
                     "first_review":0,  # 首次复习时间
                     "last_review": 0,  # 最后复习时间
                     "last_reduce" : 0,   # 上次减少的熟练度
-                    "review_count" : 0   # 复习次数，0 表示新词
+                    "review_count" : 0,  # 复习次数，0 表示新词
+                    "fail_count" : 0,    # 答错次数
+                    "success_count" : 0  # 答对次数
                 }
                 words_data.append(new_word)
                 exists.add(eng)
@@ -128,10 +174,22 @@ def new_word_reduce():
             if now - word["first_review"] <= 86400 and STD_PRO <= word["proficiency"] <= MAX_PRO: # 新单词复习时间少于1天且熟练度达标
                 word["proficiency"] = int(STD_PRO - 0.8 * ADD_POINT)
 
+# 计算单词的“难记”加成倍率
+def word_difficulty(word):
+    """错误率越高说明越难记住，权重倍率越大；
+    错误率低于 HARD_RATE_THRESHOLD 的词不受影响（倍率保持 1）"""
+    total = word.get("fail_count", 0) + word.get("success_count", 0)
+    if total < HARD_MIN_REVIEWS:
+        return 1.0   # 复习次数太少，不足以判定是否难记
+    fail_rate = word.get("fail_count", 0) / total
+    excess = max(0.0, fail_rate - HARD_RATE_THRESHOLD)
+    return min(HARD_CAP, 1.0 + HARD_BOOST * excess)
+
 # 计算单个单词的抽取权重
 def word_weight(word, now):
-    """熟练度越低权重越大，并叠加“超期未复习”的加成"""
+    """熟练度越低权重越大，并叠加“超期未复习”和“难记程度”的加成"""
     weight = (MAX_PRO - word["proficiency"]) ** WEIGHT_POWER
+    weight *= word_difficulty(word)
 
     cooldown = get_cooldown(word["proficiency"])
     last = word.get("last_review", 0) or word.get("first_review", 0)
@@ -295,6 +353,11 @@ def start_review():
             current_word["first_review"] = now
         # 累计复习次数，首次复习后不再算作新词
         current_word["review_count"] = current_word.get("review_count", 0) + 1
+        # 累计对错次数，用于识别难记词
+        if result == "forgotten":
+            current_word["fail_count"] = current_word.get("fail_count", 0) + 1
+        else:
+            current_word["success_count"] = current_word.get("success_count", 0) + 1
         review_counts += 1
         review_words.add(current_word["en"])
         current_word["last_review"] = now
