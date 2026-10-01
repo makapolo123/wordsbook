@@ -38,6 +38,27 @@ def load_words():
             words_data = json.load(f)
     except FileNotFoundError:
         words_data = []
+    migrate_data()
+
+# 旧存档字段补齐
+def migrate_data():
+    """为旧版存档补齐缺失字段，保证后续逻辑使用的字段统一存在"""
+    changed = False
+    for word in words_data:
+        if "first_review" not in word:
+            # 旧存档无此字段，用最后复习时间兜底（0 表示从未复习）
+            word["first_review"] = word.get("last_review", 0)
+            changed = True
+        if "last_reduce" not in word:
+            word["last_reduce"] = 0
+            changed = True
+        if "review_count" not in word:
+            # 已复习过的词至少记为 1 次
+            word["review_count"] = 1 if word.get("last_review", 0) else 0
+            changed = True
+    if changed:
+        save_words()
+        print("检测到旧版存档，已自动补齐字段并保存")
 
 # 导入单词
 def import_txt(file_path):
@@ -64,7 +85,8 @@ def import_txt(file_path):
                     "proficiency" : 50,
                     "first_review":0,  # 首次复习时间
                     "last_review": 0,  # 最后复习时间
-                    "last_reduce" : 0   # 上次减少的熟练度
+                    "last_reduce" : 0,   # 上次减少的熟练度
+                    "review_count" : 0   # 复习次数，0 表示新词
                 }
                 words_data.append(new_word)
 
@@ -252,6 +274,8 @@ def start_review():
         if current_word["last_review"] == 0:
             new_words += 1
             current_word["first_review"] = now
+        # 累计复习次数，首次复习后不再算作新词
+        current_word["review_count"] = current_word.get("review_count", 0) + 1
         review_counts += 1
         review_words.add(current_word["en"])
         current_word["last_review"] = now
