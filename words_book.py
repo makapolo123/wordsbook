@@ -44,13 +44,14 @@ def load_words():
             words_data = json.load(f)
     except FileNotFoundError:
         words_data = []
-    migrate_data()
+    normalize_words()
 
-# 旧存档字段补齐
-def migrate_data():
-    """为旧版存档补齐缺失字段，保证后续逻辑使用的字段统一存在"""
+# 存档字段校验与补齐
+def normalize_words():
+    """每次加载存档后执行：补齐缺失字段、清理废弃字段、按需回填历史对错次数。
+    注意这不是一次性迁移，每次启动都会跑一遍；字段齐全时不做任何事。"""
     changed = False
-    need_backfill = False
+    pending_backfill = []   # 只记录真正缺对错次数的词，避免重复累加
     for word in words_data:
         if "first_review" not in word:
             # 旧存档无此字段，用最后复习时间兜底（0 表示从未复习）
@@ -67,18 +68,18 @@ def migrate_data():
             # 首次出现对错次数，稍后从复习记录里回填历史
             word.setdefault("fail_count", 0)
             word.setdefault("success_count", 0)
-            need_backfill = True
+            pending_backfill.append(word)
             changed = True
-    if need_backfill:
-        backfill_counts_from_record()
+    if pending_backfill:
+        backfill_counts_from_record(pending_backfill)
     if changed:
         save_words()
         print("检测到旧版存档，已自动补齐字段并保存")
 
 # 从复习记录回填历史对错次数
-def backfill_counts_from_record():
-    """读取 word_record.csv，统计每个词历史答对/答错的次数，
-    让难记词加成在功能上线当天就能生效"""
+def backfill_counts_from_record(words):
+    """读取 word_record.csv，为传入的词统计它们历史答对/答错的次数。
+    只处理缺少对错次数的词，避免对已有计数的词重复累加"""
     try:
         with open(RECORD_DATA_FILE, "r", newline="", encoding="utf-8") as f:
             rows = list(csv.reader(f))[1:]   # 第一行是表头
@@ -88,7 +89,7 @@ def backfill_counts_from_record():
         print("回填历史对错次数失败：", err)
         return
 
-    index = {word["en"]: word for word in words_data}
+    index = {word["en"]: word for word in words}
     filled = 0
     for row in rows:
         if len(row) < 6:
