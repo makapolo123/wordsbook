@@ -1,0 +1,28 @@
+# 默认忽略的文件
+/shelf/
+/workspace.xml
+# 基于编辑器的 HTTP 客户端请求
+/httpRequests/
+# IDE 配置目录
+.idea/
+.vscode/
+
+# Python相关缓
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+venv/
+.venv/
+
+# 本地私人存档
+words.txt
+words.json
+test_words.json
+demo.txt
+test.py
+statistic_data.txt
+word_record.csv
+
+# 备份文件
+*.bak
