@@ -103,12 +103,19 @@ def pick_random_word():
         and time.time() - word.get("last_review", 0) > get_cooldown(word["proficiency"])
     ]
     if candidates:
+        new_word = []
         for word in candidates:
             # 熟练度越低，权重越大
-            weight = (MAX_PRO - word["proficiency"]) ** 2
-            weight_list.append(weight)      
-        # 按权重抽取1个单词
-        target_word = random.choices(candidates, weights=weight_list, k=1)[0]
+            weight = (MAX_PRO - word["proficiency"]) ** 3
+            weight_list.append(weight)
+            # 新单词优先出现
+            if time.time() - word.get("first_review", -1) <= 86400 or word.get("first_review", -1) == 0:
+                new_word.append(word)
+        # 按权重抽取1个单词,新单词优先出现
+        if new_word:
+            target_word = random.choices(new_word, weights=[(MAX_PRO - word["proficiency"]) ** 3 for word in new_word], k=1)[0]
+        else:
+            target_word = random.choices(candidates, weights=weight_list, k=1)[0]
         return target_word
     else:
         for word in words_data:
@@ -116,7 +123,7 @@ def pick_random_word():
                 continue
             candidates.append(word)
             # 熟练度越低，权重越大
-            weight = (MAX_PRO - word["proficiency"]) ** 2
+            weight = (MAX_PRO - word["proficiency"]) ** 3
             weight_list.append(weight)
             target_word = random.choices(candidates, weights=weight_list, k=1)[0]
             return target_word
