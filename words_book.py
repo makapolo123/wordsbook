@@ -49,6 +49,7 @@ def load_words():
 def migrate_data():
     """为旧版存档补齐缺失字段，保证后续逻辑使用的字段统一存在"""
     changed = False
+    need_backfill = False
     for word in words_data:
         if "first_review" not in word:
             # 旧存档无此字段，用最后复习时间兜底（0 表示从未复习）
@@ -61,9 +62,46 @@ def migrate_data():
             # 已复习过的词至少记为 1 次
             word["review_count"] = 1 if word.get("last_review", 0) else 0
             changed = True
+        if "fail_count" not in word or "success_count" not in word:
+            # 首次出现对错次数，稍后从复习记录里回填历史
+            word.setdefault("fail_count", 0)
+            word.setdefault("success_count", 0)
+            need_backfill = True
+            changed = True
+    if need_backfill:
+        backfill_counts_from_record()
     if changed:
         save_words()
         print("检测到旧版存档，已自动补齐字段并保存")
+
+# 从复习记录回填历史对错次数
+def backfill_counts_from_record():
+    """读取 word_record.csv，统计每个词历史答对/答错的次数，
+    让难记词加成在功能上线当天就能生效"""
+    try:
+        with open(RECORD_DATA_FILE, "r", newline="", encoding="utf-8") as f:
+            rows = list(csv.reader(f))[1:]   # 第一行是表头
+    except FileNotFoundError:
+        return
+    except Exception as err:
+        print("回填历史对错次数失败：", err)
+        return
+
+    index = {word["en"]: word for word in words_data}
+    filled = 0
+    for row in rows:
+        if len(row) < 6:
+            continue
+        word = index.get(row[1])
+        if word is None:
+            continue
+        if row[5] == "forgotten":
+            word["fail_count"] += 1
+        else:
+            word["success_count"] += 1
+        filled += 1
+    if filled:
+        print(f"已从复习记录回填 {filled} 次历史结果")
 
 # 导入单词
 def import_txt(file_path):
@@ -92,7 +130,9 @@ def import_txt(file_path):
                     "first_review":0,  # 首次复习时间
                     "last_review": 0,  # 最后复习时间
                     "last_reduce" : 0,   # 上次减少的熟练度
-                    "review_count" : 0   # 复习次数，0 表示新词
+                    "review_count" : 0,  # 复习次数，0 表示新词
+                    "fail_count" : 0,    # 答错次数
+                    "success_count" : 0  # 答对次数
                 }
                 words_data.append(new_word)
                 exists.add(eng)
@@ -300,6 +340,11 @@ def start_review():
             current_word["first_review"] = now
         # 累计复习次数，首次复习后不再算作新词
         current_word["review_count"] = current_word.get("review_count", 0) + 1
+        # 累计对错次数，用于识别难记词
+        if result == "forgotten":
+            current_word["fail_count"] = current_word.get("fail_count", 0) + 1
+        else:
+            current_word["success_count"] = current_word.get("success_count", 0) + 1
         review_counts += 1
         review_words.add(current_word["en"])
         current_word["last_review"] = now
