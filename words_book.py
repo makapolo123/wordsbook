@@ -59,9 +59,9 @@ def migrate_data():
         if "last_reduce" not in word:
             word["last_reduce"] = 0
             changed = True
-        if "review_count" not in word:
-            # 已复习过的词至少记为 1 次
-            word["review_count"] = 1 if word.get("last_review", 0) else 0
+        if "review_count" in word:
+            # 新词判定已改用 first_review == 0，该字段多余且与对错次数矛盾
+            word.pop("review_count")
             changed = True
         if "fail_count" not in word or "success_count" not in word:
             # 首次出现对错次数，稍后从复习记录里回填历史
@@ -131,7 +131,6 @@ def import_txt(file_path):
                     "first_review":0,  # 首次复习时间
                     "last_review": 0,  # 最后复习时间
                     "last_reduce" : 0,   # 上次减少的熟练度
-                    "review_count" : 0,  # 复习次数，0 表示新词
                     "fail_count" : 0,    # 答错次数
                     "success_count" : 0  # 答对次数
                 }
@@ -178,7 +177,7 @@ def new_word_reduce():
 def word_difficulty(word):
     """错误率越高说明越难记住，权重倍率越大；
     错误率低于 HARD_RATE_THRESHOLD 的词不受影响（倍率保持 1）"""
-    total = word.get("fail_count", 0) + word.get("success_count", 0)
+    total = word.get("fail_count", 0) + word.get("success_count", 0)   # 对错次数之和即复习次数
     if total < HARD_MIN_REVIEWS:
         return 1.0   # 复习次数太少，不足以判定是否难记
     fail_rate = word.get("fail_count", 0) / total
@@ -202,6 +201,10 @@ def word_weight(word, now):
     # 软冷却：刚复习过的词权重被压低，逾期越久权重越高（封顶）
     return weight * min(OVERDUE_CAP, max(OVERDUE_FLOOR, overdue))
 
+# 判断是否为新单词（从未复习过）
+def is_new_word(word):
+    return word.get("first_review", 0) == 0
+
 # 抽取单词
 def pick_random_word():
     """分层加权抽取：先按固定比例在“新词池/复习池”之间选择，再在池内按权重抽取。
@@ -215,7 +218,7 @@ def pick_random_word():
     for word in words_data:
         if word["proficiency"] >= STD_PRO:
             continue
-        if word.get("review_count", 0) == 0:
+        if is_new_word(word):
             new_pool.append(word)
         else:
             review_pool.append(word)
@@ -348,12 +351,11 @@ def start_review():
 
         # 记录复习情况
         now = time.time()
-        if current_word["last_review"] == 0:
+        if is_new_word(current_word):
+            # 首次复习：记录首次复习时间，之后不再算作新词
             new_words += 1
             current_word["first_review"] = now
-        # 累计复习次数，首次复习后不再算作新词
-        current_word["review_count"] = current_word.get("review_count", 0) + 1
-        # 累计对错次数，用于识别难记词
+        # 累计对错次数，两者之和即为复习次数，用于识别难记词
         if result == "forgotten":
             current_word["fail_count"] = current_word.get("fail_count", 0) + 1
         else:
