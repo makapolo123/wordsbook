@@ -13,6 +13,14 @@ MIN_PRO = 50         # 最小熟练度
 ADD_POINT = 10       # 增加熟练度
 SUB_POINT = 8        # 减少熟练度
 
+# ===== 抽取策略参数 =====
+NEW_POOL_RATIO = 0.5        # 新词池抽取占比，剩余概率给复习池（0~1）
+WEIGHT_POWER = 3            # 熟练度权重指数，越大越偏向低熟练度的词
+COOLDOWN_MIN_HOURS = 0.25   # 最低复习间隔（小时），对应最低熟练度
+COOLDOWN_MAX_HOURS = 24.0   # 最高复习间隔（小时），对应最高熟练度
+OVERDUE_FLOOR = 0.05        # 刚复习过的词的权重系数下限
+OVERDUE_CAP = 3.0           # 逾期很久的词的权重系数上限
+
 words_data = []    # 单词列表
 
 # 保存单词
@@ -30,6 +38,27 @@ def load_words():
             words_data = json.load(f)
     except FileNotFoundError:
         words_data = []
+    migrate_data()
+
+# 旧存档字段补齐
+def migrate_data():
+    """为旧版存档补齐缺失字段，保证后续逻辑使用的字段统一存在"""
+    changed = False
+    for word in words_data:
+        if "first_review" not in word:
+            # 旧存档无此字段，用最后复习时间兜底（0 表示从未复习）
+            word["first_review"] = word.get("last_review", 0)
+            changed = True
+        if "last_reduce" not in word:
+            word["last_reduce"] = 0
+            changed = True
+        if "review_count" not in word:
+            # 已复习过的词至少记为 1 次
+            word["review_count"] = 1 if word.get("last_review", 0) else 0
+            changed = True
+    if changed:
+        save_words()
+        print("检测到旧版存档，已自动补齐字段并保存")
 
 # 导入单词
 def import_txt(file_path):
@@ -39,6 +68,8 @@ def import_txt(file_path):
         with open(file_path, "r", encoding="utf-8") as f:
             words = f.readlines()
 
+        # 已存在单词的集合只需构建一次，导入时同步加入新词避免文件内重复
+        exists = {w["en"] for w in words_data}
         for word in words:
             word = word.strip()
             if not word or "," not in word:  # 跳过空行、没有逗号分隔的无效行
@@ -48,7 +79,6 @@ def import_txt(file_path):
             eng = eng.strip()
             chn = chn.strip()
             # 判断单词是否已经存在
-            exists = {w["en"] for w in words_data}
             if eng not in exists:
                 new_word = {
                     "en" : eng,
@@ -56,9 +86,11 @@ def import_txt(file_path):
                     "proficiency" : 50,
                     "first_review":0,  # 首次复习时间
                     "last_review": 0,  # 最后复习时间
-                    "last_reduce" : 0   # 上次减少的熟练度
+                    "last_reduce" : 0,   # 上次减少的熟练度
+                    "review_count" : 0   # 复习次数，0 表示新词
                 }
                 words_data.append(new_word)
+                exists.add(eng)
 
         save_words()
         print("单词导入成功")
@@ -67,9 +99,13 @@ def import_txt(file_path):
 
 # 冷却复习时间
 def get_cooldown(proficiency):
-    base_time = round((2.7 ** (proficiency / 100)) * 15, 1)   # 复习时间间隔，熟练度越高，复习时间间隔越长
+    """复习时间间隔（秒）：熟练度越高间隔越长，
+    从 COOLDOWN_MIN_HOURS 指数增长到 COOLDOWN_MAX_HOURS"""
+    ratio = (proficiency - MIN_PRO) / (MAX_PRO - MIN_PRO)
+    ratio = min(1.0, max(0.0, ratio))   # 防止熟练度越界导致比值异常
+    base_hours = COOLDOWN_MIN_HOURS * (COOLDOWN_MAX_HOURS / COOLDOWN_MIN_HOURS) ** ratio
     jitter = random.uniform(0.9, 1.1)    # 加入 ±10% 的随机抖动
-    return int(base_time * jitter)
+    return int(base_hours * 3600 * jitter)
 
 # 熟练度遗忘衰减
 def forgetting_reduce():
@@ -92,41 +128,50 @@ def new_word_reduce():
             if now - word["first_review"] <= 86400 and STD_PRO <= word["proficiency"] <= MAX_PRO: # 新单词复习时间少于1天且熟练度达标
                 word["proficiency"] = int(STD_PRO - 0.8 * ADD_POINT)
 
+# 计算单个单词的抽取权重
+def word_weight(word, now):
+    """熟练度越低权重越大，并叠加“超期未复习”的加成"""
+    weight = (MAX_PRO - word["proficiency"]) ** WEIGHT_POWER
+
+    cooldown = get_cooldown(word["proficiency"])
+    last = word.get("last_review", 0) or word.get("first_review", 0)
+    if last and cooldown > 0:
+        overdue = (now - last) / cooldown
+    else:
+        # 从未复习过的词按最高优先级处理
+        overdue = OVERDUE_CAP
+
+    # 软冷却：刚复习过的词权重被压低，逾期越久权重越高（封顶）
+    return weight * min(OVERDUE_CAP, max(OVERDUE_FLOOR, overdue))
+
 # 抽取单词
 def pick_random_word():
-    """根据复习时间间隔和熟练度加权随机抽取单词，复习时间间隔长的，熟练度越低越容易出现"""
-    weight_list = [] # 单词权重
-    # 优先从长时间没复习的词中抽
-    candidates = [
-        word for word in words_data
-        if word["proficiency"] < STD_PRO
-        and time.time() - word.get("last_review", 0) > get_cooldown(word["proficiency"])
-    ]
-    if candidates:
-        new_word = []
-        for word in candidates:
-            # 熟练度越低，权重越大
-            weight = (MAX_PRO - word["proficiency"]) ** 3
-            weight_list.append(weight)
-            # 新单词优先出现
-            if time.time() - word.get("first_review", -1) <= 86400 or word.get("first_review", -1) == 0:
-                new_word.append(word)
-        # 按权重抽取1个单词,新单词优先出现
-        if new_word:
-            target_word = random.choices(new_word, weights=[(MAX_PRO - word["proficiency"]) ** 3 for word in new_word], k=1)[0]
+    """分层加权抽取：先按固定比例在“新词池/复习池”之间选择，再在池内按权重抽取。
+    所有单词放在同一个池子里比权重时，词数越多单个词的概率被稀释得越厉害，
+    分层后新词和旧词各自保有固定份额，不受词库规模影响"""
+    now = time.time()
+
+    # 从未复习过的是新词，其余是待复习的旧词；已达标(>= STD_PRO 或 101)的词不参与
+    new_pool = []
+    review_pool = []
+    for word in words_data:
+        if word["proficiency"] >= STD_PRO:
+            continue
+        if word.get("review_count", 0) == 0:
+            new_pool.append(word)
         else:
-            target_word = random.choices(candidates, weights=weight_list, k=1)[0]
-        return target_word
+            review_pool.append(word)
+
+    # 按固定比例选择池子；某个池为空时自动回退到另一个池
+    if new_pool and (not review_pool or random.random() < NEW_POOL_RATIO):
+        pool = new_pool
+    elif review_pool:
+        pool = review_pool
     else:
-        for word in words_data:
-            if word["proficiency"] >= STD_PRO:
-                continue
-            candidates.append(word)
-            # 熟练度越低，权重越大
-            weight = (MAX_PRO - word["proficiency"]) ** 3
-            weight_list.append(weight)
-            target_word = random.choices(candidates, weights=weight_list, k=1)[0]
-            return target_word
+        return None  # 已无未达标的单词
+
+    weights = [word_weight(word, now) for word in pool]
+    return random.choices(pool, weights=weights, k=1)[0]
 
 # 判断所有单词是否达标
 def all_word_finish():
@@ -139,7 +184,8 @@ def all_word_finish():
 # 记录每次复习的数据
 def statistic_data(start_time, end_time, review_counts, remember_counts, review_words, new_words):
     with open(STATISTIC_FILE, "a", encoding="utf-8") as f:
-        f.write(f"\n复习时间：{datetime.fromtimestamp(start_time).strftime("%Y-%m-%d %H:%M:%S")}\n")
+        start_text = datetime.fromtimestamp(start_time).strftime("%Y-%m-%d %H:%M:%S")
+        f.write(f"\n复习时间：{start_text}\n")
         review_time = int(end_time - start_time)
         f.write(f"用时：{int(review_time // 3600)}:{int(review_time % 3600 // 60)}:{int(review_time % 60)}\n")
         f.write(f"复习单词次数：{review_counts}\n")
@@ -189,6 +235,9 @@ def start_review():
         
         # 抽取单词
         current_word = pick_random_word()
+        if current_word is None:  # 兜底：已无未达标的单词
+            print("所有单词已达标！")
+            break
         word_record_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S") # 单个单词复习时间
         initial_proficiency = current_word["proficiency"]
 
@@ -244,6 +293,8 @@ def start_review():
         if current_word["last_review"] == 0:
             new_words += 1
             current_word["first_review"] = now
+        # 累计复习次数，首次复习后不再算作新词
+        current_word["review_count"] = current_word.get("review_count", 0) + 1
         review_counts += 1
         review_words.add(current_word["en"])
         current_word["last_review"] = now
