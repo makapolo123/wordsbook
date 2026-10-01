@@ -24,6 +24,7 @@ OVERDUE_CAP = 3.0           # 逾期很久的词的权重系数上限
 # ===== 难记词加成参数 =====
 HARD_RATE_THRESHOLD = 0.25  # 错误率低于该值不算难记词，权重不受影响
 HARD_BOOST = 10.0           # 错误率每超出阈值 0.05，权重就多 0.5 倍
+HARD_CAP = 4.0              # 难记加成倍率的上限
 HARD_MIN_REVIEWS = 4        # 复习次数少于该值不做难记判定
 
 words_data = []    # 单词列表
@@ -182,7 +183,7 @@ def word_difficulty(word):
         return 1.0   # 复习次数太少，不足以判定是否难记
     fail_rate = word.get("fail_count", 0) / total
     excess = max(0.0, fail_rate - HARD_RATE_THRESHOLD)
-    return 1.0 + HARD_BOOST * excess
+    return min(HARD_CAP, 1.0 + HARD_BOOST * excess)
 
 # 计算单个单词的抽取权重
 def word_weight(word, now):
