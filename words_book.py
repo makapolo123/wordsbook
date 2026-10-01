@@ -99,9 +99,13 @@ def import_txt(file_path):
 
 # 冷却复习时间
 def get_cooldown(proficiency):
-    base_time = round((2.7 ** (proficiency / 100)) * 15, 1)   # 复习时间间隔，熟练度越高，复习时间间隔越长
+    """复习时间间隔（秒）：熟练度越高间隔越长，
+    从 COOLDOWN_MIN_HOURS 指数增长到 COOLDOWN_MAX_HOURS"""
+    ratio = (proficiency - MIN_PRO) / (MAX_PRO - MIN_PRO)
+    ratio = min(1.0, max(0.0, ratio))   # 防止熟练度越界导致比值异常
+    base_hours = COOLDOWN_MIN_HOURS * (COOLDOWN_MAX_HOURS / COOLDOWN_MIN_HOURS) ** ratio
     jitter = random.uniform(0.9, 1.1)    # 加入 ±10% 的随机抖动
-    return int(base_time * jitter)
+    return int(base_hours * 3600 * jitter)
 
 # 熟练度遗忘衰减
 def forgetting_reduce():
