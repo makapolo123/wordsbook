@@ -184,7 +184,8 @@ def all_word_finish():
 # 记录每次复习的数据
 def statistic_data(start_time, end_time, review_counts, remember_counts, review_words, new_words):
     with open(STATISTIC_FILE, "a", encoding="utf-8") as f:
-        f.write(f"\n复习时间：{datetime.fromtimestamp(start_time).strftime("%Y-%m-%d %H:%M:%S")}\n")
+        start_text = datetime.fromtimestamp(start_time).strftime("%Y-%m-%d %H:%M:%S")
+        f.write(f"\n复习时间：{start_text}\n")
         review_time = int(end_time - start_time)
         f.write(f"用时：{int(review_time // 3600)}:{int(review_time % 3600 // 60)}:{int(review_time % 60)}\n")
         f.write(f"复习单词次数：{review_counts}\n")
