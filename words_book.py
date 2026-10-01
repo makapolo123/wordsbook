@@ -13,6 +13,14 @@ MIN_PRO = 50         # 最小熟练度
 ADD_POINT = 10       # 增加熟练度
 SUB_POINT = 8        # 减少熟练度
 
+# ===== 抽取策略参数 =====
+NEW_POOL_RATIO = 0.5        # 新词池抽取占比，剩余概率给复习池（0~1）
+WEIGHT_POWER = 2            # 熟练度权重指数，越大越偏向低熟练度的词
+COOLDOWN_MIN_HOURS = 0.25   # 最低复习间隔（小时），对应最低熟练度
+COOLDOWN_MAX_HOURS = 24.0   # 最高复习间隔（小时），对应最高熟练度
+OVERDUE_FLOOR = 0.05        # 刚复习过的词的权重系数下限
+OVERDUE_CAP = 3.0           # 逾期很久的词的权重系数上限
+
 words_data = []    # 单词列表
 
 # 保存单词
