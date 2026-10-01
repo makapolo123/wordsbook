@@ -21,6 +21,11 @@ COOLDOWN_MAX_HOURS = 24.0   # 最高复习间隔（小时），对应最高熟�
 OVERDUE_FLOOR = 0.05        # 刚复习过的词的权重系数下限
 OVERDUE_CAP = 3.0           # 逾期很久的词的权重系数上限
 
+# ===== 难记词加成参数 =====
+HARD_RATE_THRESHOLD = 0.25  # 错误率低于该值不算难记词，权重不受影响
+HARD_BOOST = 8.0            # 错误率每超出阈值 0.05，权重就多 0.4 倍
+HARD_MIN_REVIEWS = 4        # 复习次数少于该值不做难记判定
+
 words_data = []    # 单词列表
 
 # 保存单词
