@@ -23,7 +23,7 @@ OVERDUE_CAP = 3.0           # 逾期很久的词的权重系数上限
 
 # ===== 难记词加成参数 =====
 HARD_RATE_THRESHOLD = 0.25  # 错误率低于该值不算难记词，权重不受影响
-HARD_BOOST = 8.0            # 错误率每超出阈值 0.05，权重就多 0.4 倍
+HARD_BOOST = 10.0           # 错误率每超出阈值 0.05，权重就多 0.5 倍
 HARD_MIN_REVIEWS = 4        # 复习次数少于该值不做难记判定
 
 words_data = []    # 单词列表
@@ -173,10 +173,22 @@ def new_word_reduce():
             if now - word["first_review"] <= 86400 and STD_PRO <= word["proficiency"] <= MAX_PRO: # 新单词复习时间少于1天且熟练度达标
                 word["proficiency"] = int(STD_PRO - 0.8 * ADD_POINT)
 
+# 计算单词的“难记”加成倍率
+def word_difficulty(word):
+    """错误率越高说明越难记住，权重倍率越大；
+    错误率低于 HARD_RATE_THRESHOLD 的词不受影响（倍率保持 1）"""
+    total = word.get("fail_count", 0) + word.get("success_count", 0)
+    if total < HARD_MIN_REVIEWS:
+        return 1.0   # 复习次数太少，不足以判定是否难记
+    fail_rate = word.get("fail_count", 0) / total
+    excess = max(0.0, fail_rate - HARD_RATE_THRESHOLD)
+    return 1.0 + HARD_BOOST * excess
+
 # 计算单个单词的抽取权重
 def word_weight(word, now):
-    """熟练度越低权重越大，并叠加“超期未复习”的加成"""
+    """熟练度越低权重越大，并叠加“超期未复习”和“难记程度”的加成"""
     weight = (MAX_PRO - word["proficiency"]) ** WEIGHT_POWER
+    weight *= word_difficulty(word)
 
     cooldown = get_cooldown(word["proficiency"])
     last = word.get("last_review", 0) or word.get("first_review", 0)
