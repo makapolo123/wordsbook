@@ -68,6 +68,8 @@ def import_txt(file_path):
         with open(file_path, "r", encoding="utf-8") as f:
             words = f.readlines()
 
+        # 已存在单词的集合只需构建一次，导入时同步加入新词避免文件内重复
+        exists = {w["en"] for w in words_data}
         for word in words:
             word = word.strip()
             if not word or "," not in word:  # 跳过空行、没有逗号分隔的无效行
@@ -77,7 +79,6 @@ def import_txt(file_path):
             eng = eng.strip()
             chn = chn.strip()
             # 判断单词是否已经存在
-            exists = {w["en"] for w in words_data}
             if eng not in exists:
                 new_word = {
                     "en" : eng,
@@ -89,6 +90,7 @@ def import_txt(file_path):
                     "review_count" : 0   # 复习次数，0 表示新词
                 }
                 words_data.append(new_word)
+                exists.add(eng)
 
         save_words()
         print("单词导入成功")
