@@ -23,3 +23,6 @@ demo.txt
 test.py
 statistic_data.txt
 word_record.csv
+
+# 备份文件
+*.bak
