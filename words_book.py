@@ -354,7 +354,7 @@ def start_review():
 
         # 记录复习情况
         now = time.time()
-        if is_new_word(current_word):
+        if current_word["first_review"] == 0:
             # 首次复习：记录首次复习时间，之后不再算作新词
             new_words += 1
             current_word["first_review"] = now
