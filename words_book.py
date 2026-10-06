@@ -161,12 +161,14 @@ def forgetting_reduce():
         last = word.get("last_review", 0)
         if last == 0 or word["proficiency"] == 101:
             continue
-        reduce = int(max(0, (now - last) // 86400 * 2 - 1))     # 随着时间间隔变长而减少相应的熟练度
+        if word["last_reduce"] >= MAX_PRO - MIN_PRO:
+            continue
+        reduce = int(max(0, (now - last) // 86400 * 2 - 1))    # 随着时间间隔变长而减少相应的熟练度
         if reduce > word["last_reduce"]:
             word["proficiency"] = int(max(MIN_PRO, word["proficiency"] - reduce))
             word["last_reduce"] = reduce
 
-# 达标的新单词熟练度减少
+# 达标的新单词熟练度减少（一天内复习多次新单词）
 def new_word_reduce():
     now = time.time()
     for word in words_data:
@@ -202,9 +204,9 @@ def word_weight(word, now):
     # 软冷却：刚复习过的词权重被压低，逾期越久权重越高（封顶）
     return weight * min(OVERDUE_CAP, max(OVERDUE_FLOOR, overdue))
 
-# 判断是否为新单词（从未复习过）
+# 判断是否为新单词（最近一天内首次复习过的）
 def is_new_word(word):
-    return word.get("first_review", 0) == 0
+    return word.get("first_review", -1) == 0 or time.time() - word["first_review"] <= 86400
 
 # 抽取单词
 def pick_random_word():
@@ -213,7 +215,7 @@ def pick_random_word():
     分层后新词和旧词各自保有固定份额，不受词库规模影响"""
     now = time.time()
 
-    # 从未复习过的是新词，其余是待复习的旧词；已达标(>= STD_PRO 或 101)的词不参与
+    # 最近一天内首次复习过的是新词，其余是待复习的旧词；已达标(>= STD_PRO 或 101)的词不参与
     new_pool = []
     review_pool = []
     for word in words_data:
