@@ -1,31 +1,38 @@
 import csv
 import json
+import math
 import random
+import shutil
 import time
 from datetime import datetime
 
 WORDS_SAVE_FILE = "words.json"         # 单词本地存档文件
 STATISTIC_FILE = "statistic_data.txt"  # 复习数据文件
 RECORD_DATA_FILE = "word_record.csv"   # 复习的单词数据
-STD_PRO = 90       # 达标熟练度
-MAX_PRO = 100        # 最大熟练度
-MIN_PRO = 50         # 最小熟练度
-ADD_POINT = 10       # 增加熟练度
-SUB_POINT = 8        # 减少熟练度
+
+# ===== 熟练度参数 =====
+STD_PRO = 90         # 达标熟练度（约对应 90 天记忆强度，即真正掌握）
+MAX_PRO = 100        # 最大熟练度（对应记忆强度上限）
+MIN_PRO = 50         # 最小熟练度（从未复习/刚答错）
+
+# ===== 记忆强度（调度）参数 =====
+MIN_STABILITY_DAYS = 0.25            # 记忆强度下限（约 6 小时），也是熟练度 50 的锚点
+INIT_STABILITY_DAYS = 0.5            # 首次答对后的记忆强度（天）
+MAX_STABILITY_DAYS = 390.0           # 记忆强度上限（天），对应熟练度 100
+STABILITY_FAIL_FACTOR = 0.4          # 答错时记忆强度乘以该系数
+EASE_DEFAULT = 2.5                   # 记忆增长系数初始值
+EASE_MIN = 1.3                       # 增长系数下限（难记词）
+EASE_MAX = 3.0                       # 增长系数上限
+EASE_UP = 0.1                        # 答对时增长系数增加量
+EASE_DOWN = 0.2                      # 答错时增长系数减少量
+MIGRATE_MAX_STABILITY_DAYS = 14.0    # 旧存档迁移时记忆强度的上限
 
 # ===== 抽取策略参数 =====
-NEW_POOL_RATIO = 0.5        # 新词池抽取占比，剩余概率给复习池（0~1）
-WEIGHT_POWER = 3            # 熟练度权重指数，越大越偏向低熟练度的词
-COOLDOWN_MIN_HOURS = 0.25   # 最低复习间隔（小时），对应最低熟练度
-COOLDOWN_MAX_HOURS = 24.0   # 最高复习间隔（小时），对应最高熟练度
-OVERDUE_FLOOR = 0.05        # 刚复习过的词的权重系数下限
-OVERDUE_CAP = 3.0           # 逾期很久的词的权重系数上限
-
-# ===== 难记词加成参数 =====
-HARD_RATE_THRESHOLD = 0.25  # 错误率低于该值不算难记词，权重不受影响
-HARD_BOOST = 10.0           # 错误率每超出阈值 0.05，权重就多 0.5 倍
-HARD_CAP = 4.0              # 难记加成倍率的上限
-HARD_MIN_REVIEWS = 4        # 复习次数少于该值不做难记判定
+NEW_POOL_RATIO = 0.5             # 新词池抽取占比，剩余概率给复习池（0~1）
+DUE_THRESHOLD = 1.0              # 逾期倍数达到该值才算到期（1 = 正好到计划复习时间）
+MIN_REVIEW_GAP_HOURS = 12        # 同一个词两次抽取的最小间隔，避免当天反复抽到同一个词
+LATENESS_CAP = 2.0               # 逾期倍数上限：超过后权重不再增加，保证到期词公平轮换
+LATENESS_POWER = 2               # 逾期倍数权重指数，越大越偏向逾期久的词
 
 words_data = []    # 单词列表
 
@@ -48,17 +55,19 @@ def load_words():
 
 # 存档字段校验与补齐
 def normalize_words():
-    """每次加载存档后执行：补齐缺失字段、清理废弃字段、按需回填历史对错次数。
+    """每次加载存档后执行：补齐缺失字段、清理废弃字段、按需回填历史并迁移旧存档。
     注意这不是一次性迁移，每次启动都会跑一遍；字段齐全时不做任何事。"""
     changed = False
     pending_backfill = []   # 只记录真正缺对错次数的词，避免重复累加
+    legacy_words = []       # 还没有记忆强度字段的旧词，稍后统一迁移
     for word in words_data:
         if "first_review" not in word:
             # 旧存档无此字段，用最后复习时间兜底（0 表示从未复习）
             word["first_review"] = word.get("last_review", 0)
             changed = True
-        if "last_reduce" not in word:
-            word["last_reduce"] = 0
+        if "last_reduce" in word:
+            # 熟练度不再按天数扣分，该字段已废弃
+            word.pop("last_reduce")
             changed = True
         if "review_count" in word:
             # 新词判定已改用 first_review == 0，该字段多余且与对错次数矛盾
@@ -70,11 +79,88 @@ def normalize_words():
             word.setdefault("success_count", 0)
             pending_backfill.append(word)
             changed = True
+        if "stability" not in word or "ease" not in word:
+            word.setdefault("stability", 0.0)
+            word.setdefault("ease", EASE_DEFAULT)
+            legacy_words.append(word)
+            changed = True
     if pending_backfill:
         backfill_counts_from_record(pending_backfill)
+    if legacy_words:
+        migrate_stability(legacy_words)
     if changed:
         save_words()
         print("检测到旧版存档，已自动补齐字段并保存")
+
+# 旧存档迁移：按历史复习顺序估算记忆强度
+def migrate_stability(legacy_words):
+    """把没有记忆强度的旧词一次性迁移到新模型：
+    优先按 word_record.csv 的顺序回放对错序列，没有记录的词用对错次数估算。
+    迁移前备份原存档，方便回退。"""
+    print("检测到旧版存档，正在按历史复习记录迁移记忆强度...")
+    try:
+        shutil.copyfile(WORDS_SAVE_FILE, WORDS_SAVE_FILE + ".bak")
+        print(f"已备份原存档：{WORDS_SAVE_FILE}.bak")
+    except OSError as err:
+        print("备份原存档失败：", err)
+
+    sequences = read_history_sequences()
+    replayed = 0
+    for word in legacy_words:
+        results = sequences.get(word["en"])
+        if results:
+            stability, ease = replay_results(results)
+            replayed += 1
+        else:
+            stability, ease = estimate_stability(word)
+        word["stability"] = round(stability, 4)
+        word["ease"] = round(ease, 4)
+        if word["proficiency"] != 101:
+            word["proficiency"] = proficiency_from_stability(stability)
+    print(f"已迁移 {len(legacy_words)} 个单词的记忆强度（其中 {replayed} 个来自复习记录）")
+
+def read_history_sequences():
+    """按文件顺序读取每个单词的历史对错序列（True 答对 / False 答错）"""
+    sequences = {}
+    try:
+        with open(RECORD_DATA_FILE, "r", newline="", encoding="utf-8") as f:
+            reader = csv.reader(f)
+            next(reader, None)   # 第一行是表头
+            for row in reader:
+                if len(row) < 6:
+                    continue
+                result = row[5].strip()
+                if result.startswith("marked_remembered"):
+                    continue
+                if result.startswith("forgotten"):
+                    sequences.setdefault(row[1].strip(), []).append(False)
+                elif result.startswith("remembered"):
+                    sequences.setdefault(row[1].strip(), []).append(True)
+    except FileNotFoundError:
+        pass
+    except Exception as err:
+        print("读取复习记录失败：", err)
+    return sequences
+
+def replay_results(results):
+    """按对错序列回放，得到迁移用的记忆强度与增长系数"""
+    stability = 0.0
+    ease = EASE_DEFAULT
+    for remembered in results:
+        stability, ease = apply_answer(stability, ease, remembered)
+    return min(stability, MIGRATE_MAX_STABILITY_DAYS), ease
+
+def estimate_stability(word):
+    """没有复习记录的旧词：按历史对错次数估算记忆强度"""
+    successes = word.get("success_count", 0)
+    fails = word.get("fail_count", 0)
+    ease = max(EASE_MIN, min(EASE_MAX, EASE_DEFAULT + EASE_UP * successes - EASE_DOWN * fails))
+    if successes == 0:
+        return 0.0, ease
+    # 用对数计算避免大指数溢出，超过迁移上限后结果必然被截断
+    log_stability = successes * math.log(ease) + fails * math.log(STABILITY_FAIL_FACTOR)
+    stability = math.exp(min(log_stability, 10.0))
+    return min(stability, MIGRATE_MAX_STABILITY_DAYS), ease
 
 # 从复习记录回填历史对错次数
 def backfill_counts_from_record(words):
@@ -128,10 +214,11 @@ def import_txt(file_path):
                 new_word = {
                     "en" : eng,
                     "cn" : chn,
-                    "proficiency" : 50,
+                    "proficiency" : MIN_PRO,
+                    "stability" : 0.0,          # 记忆强度（天），0 表示未复习
+                    "ease" : EASE_DEFAULT,      # 记忆增长系数
                     "first_review":0,  # 首次复习时间
                     "last_review": 0,  # 最后复习时间
-                    "last_reduce" : 0,   # 上次减少的熟练度
                     "fail_count" : 0,    # 答错次数
                     "success_count" : 0  # 答对次数
                 }
@@ -143,99 +230,103 @@ def import_txt(file_path):
     except Exception as err:
         print("导入失败，错误：", err)
 
-# 冷却复习时间
-def get_cooldown(proficiency):
-    """复习时间间隔（秒）：熟练度越高间隔越长，
-    从 COOLDOWN_MIN_HOURS 指数增长到 COOLDOWN_MAX_HOURS"""
-    ratio = (proficiency - MIN_PRO) / (MAX_PRO - MIN_PRO)
-    ratio = min(1.0, max(0.0, ratio))   # 防止熟练度越界导致比值异常
-    base_hours = COOLDOWN_MIN_HOURS * (COOLDOWN_MAX_HOURS / COOLDOWN_MIN_HOURS) ** ratio
-    jitter = random.uniform(0.9, 1.1)    # 加入 ±10% 的随机抖动
-    return int(base_hours * 3600 * jitter)
-
-# 熟练度遗忘衰减
-def forgetting_reduce():
-    """根据距离上次复习的时间，自然降低熟练度"""
-    now = time.time()
-    for word in words_data:
-        last = word.get("last_review", 0)
-        if last == 0 or word["proficiency"] == 101:
-            continue
-        if word["last_reduce"] >= MAX_PRO - MIN_PRO:
-            continue
-        reduce = int(max(0, (now - last) // 86400 * 2 - 1))    # 随着时间间隔变长而减少相应的熟练度
-        if reduce > word["last_reduce"]:
-            word["proficiency"] = int(max(MIN_PRO, word["proficiency"] - reduce))
-            word["last_reduce"] = reduce
-
-# 达标的新单词熟练度减少（一天内复习多次新单词）
-def new_word_reduce():
-    now = time.time()
-    for word in words_data:
-        if word.get("first_review"):
-            if now - word["first_review"] <= 86400 and STD_PRO <= word["proficiency"] <= MAX_PRO: # 新单词复习时间少于1天且熟练度达标
-                word["proficiency"] = int(STD_PRO - 0.8 * ADD_POINT)
-
-# 计算单词的“难记”加成倍率
-def word_difficulty(word):
-    """错误率越高说明越难记住，权重倍率越大；
-    错误率低于 HARD_RATE_THRESHOLD 的词不受影响（倍率保持 1）"""
-    total = word.get("fail_count", 0) + word.get("success_count", 0)   # 对错次数之和即复习次数
-    if total < HARD_MIN_REVIEWS:
-        return 1.0   # 复习次数太少，不足以判定是否难记
-    fail_rate = word.get("fail_count", 0) / total
-    excess = max(0.0, fail_rate - HARD_RATE_THRESHOLD)
-    return min(HARD_CAP, 1.0 + HARD_BOOST * excess)
-
-# 计算单个单词的抽取权重
-def word_weight(word, now):
-    """熟练度越低权重越大，并叠加“超期未复习”和“难记程度”的加成"""
-    weight = (MAX_PRO - word["proficiency"]) ** WEIGHT_POWER
-    weight *= word_difficulty(word)
-
-    cooldown = get_cooldown(word["proficiency"])
-    last = word.get("last_review", 0) or word.get("first_review", 0)
-    if last and cooldown > 0:
-        overdue = (now - last) / cooldown
+# 根据答对/答错更新记忆强度与增长系数
+def apply_answer(stability, ease, remembered):
+    """答对：记忆强度乘以增长系数（首次为初始强度）；答错：强度骤减并降低增长系数。
+    增长系数会被答错拉低，难记词因此自动获得更短的间隔"""
+    if remembered:
+        stability = stability * ease if stability > 0 else INIT_STABILITY_DAYS
+        ease = min(EASE_MAX, ease + EASE_UP)
     else:
-        # 从未复习过的词按最高优先级处理
-        overdue = OVERDUE_CAP
+        stability = max(MIN_STABILITY_DAYS, stability * STABILITY_FAIL_FACTOR)
+        ease = max(EASE_MIN, ease - EASE_DOWN)
+    return min(MAX_STABILITY_DAYS, stability), ease
 
-    # 软冷却：刚复习过的词权重被压低，逾期越久权重越高（封顶）
-    return weight * min(OVERDUE_CAP, max(OVERDUE_FLOOR, overdue))
+# 记忆强度换算熟练度
+def proficiency_from_stability(stability):
+    """把记忆强度（天）换算成 50-100 的熟练度：对数映射，
+    记忆强度约 90 天对应 90 分（达标），达到上限 390 天时为 100 分"""
+    if stability <= 0:
+        return MIN_PRO
+    ratio = math.log(stability / MIN_STABILITY_DAYS) / math.log(MAX_STABILITY_DAYS / MIN_STABILITY_DAYS)
+    return int(round(MIN_PRO + (MAX_PRO - MIN_PRO) * min(1.0, max(0.0, ratio))))
 
-# 判断是否为新单词（最近一天内首次复习过的）
-def is_new_word(word):
-    return word.get("first_review", -1) == 0 or time.time() - word["first_review"] <= 86400
+# 逾期倍数
+def overdue_ratio(word, now):
+    """距上次复习时间 / 记忆强度：1 表示刚好到了计划复习时间，2 表示已经超期一倍。
+    从未复习的新词按上限处理（最高优先级）"""
+    stability = word.get("stability", 0)
+    last = word.get("last_review", 0)
+    if stability <= 0 or not last:
+        return LATENESS_CAP
+    return max(0.0, (now - last) / (stability * 86400))
 
 # 抽取单词
-def pick_random_word():
-    """分层加权抽取：先按固定比例在“新词池/复习池”之间选择，再在池内按权重抽取。
+def pick_random_word(now=None):
+    """分层加权抽取：先按固定比例在“新词池/复习池”之间选择，再在池内按逾期倍数加权。
+    只从已到期的词里抽（逾期倍数 ≥ DUE_THRESHOLD），所以刚复习过的词在计划间隔内
+    不会再次出现；没有到期词时返回 None，由调用方提示用户。
+    池内权重 = min(逾期倍数, LATENESS_CAP) ** LATENESS_POWER：
+    越拖延的词越容易被抽到；逾期倍数封顶后大家权重相同，因此到期词会公平轮换，
+    不会让某几个词霸占所有抽取机会。
     所有单词放在同一个池子里比权重时，词数越多单个词的概率被稀释得越厉害，
     分层后新词和旧词各自保有固定份额，不受词库规模影响"""
-    now = time.time()
+    if now is None:
+        now = time.time()
 
-    # 最近一天内首次复习过的是新词，其余是待复习的旧词；已达标(>= STD_PRO 或 101)的词不参与
-    new_pool = []
-    review_pool = []
+    # 已达标(>= STD_PRO 或 101)的词不再抽取，其余只保留已到期的词
+    due_words = []
+    min_gap = MIN_REVIEW_GAP_HOURS * 3600
     for word in words_data:
         if word["proficiency"] >= STD_PRO:
             continue
-        if is_new_word(word):
-            new_pool.append(word)
-        else:
-            review_pool.append(word)
+        last = word.get("last_review", 0)
+        if last and now - last < min_gap:
+            continue                          # 距上次抽取太近，避免当天反复抽到
+        if overdue_ratio(word, now) >= DUE_THRESHOLD:
+            due_words.append(word)
+    if not due_words:
+        return None   # 没有到期需要复习的单词
+
+    new_pool = [word for word in due_words if word.get("stability", 0) <= 0]
+    review_pool = [word for word in due_words if word.get("stability", 0) > 0]
 
     # 按固定比例选择池子；某个池为空时自动回退到另一个池
     if new_pool and (not review_pool or random.random() < NEW_POOL_RATIO):
         pool = new_pool
-    elif review_pool:
-        pool = review_pool
+        weights = [1.0] * len(pool)
     else:
-        return None  # 已无未达标的单词
-
-    weights = [word_weight(word, now) for word in pool]
+        pool = review_pool
+        weights = [max(0.01, min(overdue_ratio(word, now), LATENESS_CAP)) ** LATENESS_POWER
+                   for word in pool]
     return random.choices(pool, weights=weights, k=1)[0]
+
+# 距离最近的单词到期还有多少秒
+def next_due_seconds(now=None):
+    """返回最近一个未达标词的到期等待时间（秒）；没有未达标词时返回 None"""
+    if now is None:
+        now = time.time()
+    waits = []
+    for word in words_data:
+        if word["proficiency"] >= STD_PRO:
+            continue
+        stability = word.get("stability", 0)
+        last = word.get("last_review", 0)
+        if stability <= 0 or not last:
+            return 0
+        next_due = last + max(stability * 86400, MIN_REVIEW_GAP_HOURS * 3600)
+        waits.append(next_due - now)
+    if not waits:
+        return None
+    return max(0, min(waits))
+
+# 把等待时间格式化成提示文字
+def format_wait(seconds):
+    if seconds < 3600:
+        return f"{max(1, int(seconds // 60))} 分钟"
+    if seconds < 86400:
+        return f"{seconds / 3600:.1f} 小时"
+    return f"{seconds / 86400:.1f} 天"
 
 # 判断所有单词是否达标
 def all_word_finish():
@@ -287,8 +378,6 @@ def start_review():
     print("操作指令：1=认识  2=不认识  0=退出背诵")
 
     while True:
-        forgetting_reduce()
-        new_word_reduce()
         if all_word_finish():
             print("所有单词已达标！")
             break
@@ -297,10 +386,15 @@ def start_review():
             start_time = time.time()  # 复习开始时间
         start_flag = True
         
-        # 抽取单词
+        # 抽取单词：只抽已经到期的词
         current_word = pick_random_word()
-        if current_word is None:  # 兜底：已无未达标的单词
-            print("所有单词已达标！")
+        if current_word is None:
+            wait = next_due_seconds()
+            if wait is None:
+                print("所有单词已达标！")
+            else:
+                print(f"当前没有到期需要复习的单词，最近的一个约 {format_wait(wait)} 后到期")
+                print("稍后再来，或先导入新的单词。")
             break
         word_record_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S") # 单个单词复习时间
         initial_proficiency = current_word["proficiency"]
@@ -310,8 +404,6 @@ def start_review():
         
         # ‘0’ 退出
         if select == '0':
-            end_time = time.time()  # 复习结束时间
-            statistic_data(start_time, end_time, review_counts, remember_counts,review_words, new_words)
             save_words()
             print("进度已保存，退出")
             break
@@ -321,15 +413,15 @@ def start_review():
             print(f"释义：{current_word['cn']}")
             next_act = input("操作指令：1=下一个  2=记错了  3=记住了：").strip()
             while True:
-                # 熟练度增加，最高不能超过MAX_PRO
+                # 记住了：记忆强度乘以增长系数（首次按初始强度）
                 if next_act == '1':
-                    current_word["proficiency"] = int(min(MAX_PRO, current_word["proficiency"] + ADD_POINT))
+                    remembered = True
                     remember_counts += 1
                     result = "remembered"
                     break
-                # 熟练度减少，最低不能小于MIN_PRO
+                # 记错了：记忆强度骤减，增长系数降低
                 elif next_act == '2':
-                    current_word["proficiency"] = int(max(MIN_PRO, current_word["proficiency"] - SUB_POINT))
+                    remembered = False
                     result = "forgotten"
                     break
                 # 已经记牢了，将熟练度改为特殊值，后续不再出现
@@ -344,13 +436,21 @@ def start_review():
         # '2' 不认识
         elif select == '2':
             print(f"释义：{current_word['cn']}")
-            # 熟练度减少，最低不能小于MIN_PRO
-            current_word["proficiency"] = int(max(MIN_PRO, current_word["proficiency"] - SUB_POINT))
+            remembered = False
             result = "forgotten"
 
         else:
             print("输入错误!请重新输入！")
             continue
+
+        # 更新记忆强度与熟练度（“记住了”只写特殊值 101，不参与计算）
+        if result != "marked_remembered":
+            current_word["stability"], current_word["ease"] = apply_answer(
+                current_word.get("stability", 0),
+                current_word.get("ease", EASE_DEFAULT),
+                remembered,
+            )
+            current_word["proficiency"] = proficiency_from_stability(current_word["stability"])
 
         # 记录复习情况
         now = time.time()
@@ -358,7 +458,7 @@ def start_review():
             # 首次复习：记录首次复习时间，之后不再算作新词
             new_words += 1
             current_word["first_review"] = now
-        # 累计对错次数，两者之和即为复习次数，用于识别难记词
+        # 累计对错次数，用于统计正确率
         if result == "forgotten":
             current_word["fail_count"] = current_word.get("fail_count", 0) + 1
         else:
@@ -368,9 +468,11 @@ def start_review():
         current_word["last_review"] = now
         final_proficiency = current_word["proficiency"]
         word_record([word_record_time, current_word["en"], current_word["cn"], initial_proficiency, final_proficiency, result])
-        # 减少的熟练度归零
-        current_word["last_reduce"] = 0
         save_words()
+
+    # 只要本次复习过单词就写入统计，无论正常退出、全部达标还是没有到期词
+    if review_counts:
+        statistic_data(start_time, time.time(), review_counts, remember_counts, review_words, new_words)
 
 # 主菜单函数
 def main_menu():
