@@ -240,7 +240,7 @@ def apply_answer(stability, ease, remembered):
     else:
         stability = max(MIN_STABILITY_DAYS, stability * STABILITY_FAIL_FACTOR)
         ease = max(EASE_MIN, ease - EASE_DOWN)
-    return min(MAX_STABILITY_DAYS, stability), ease
+    return round(min(MAX_STABILITY_DAYS, stability), 4), round(ease, 4)
 
 # 记忆强度换算熟练度
 def proficiency_from_stability(stability):
