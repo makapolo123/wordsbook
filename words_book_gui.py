@@ -78,25 +78,39 @@ def _keep_pos_with_meaning(part: str) -> str:
 
 
 def _format_definition(text: str) -> str:
-    """Keep different parts of speech on separate lines."""
+    """Group shared POS labels and keep distinct meanings on separate lines."""
     text = text.strip()
     markers = list(_POS_MARKER.finditer(text))
     if len(markers) <= 1:
         return _keep_pos_with_meaning(text)
 
+    groups = []
+    current_group = [markers[0]]
+    for marker in markers[1:]:
+        between = text[current_group[-1].end() : marker.start()]
+        if not between.strip(" /；;，,"):
+            current_group.append(marker)
+        else:
+            groups.append(current_group)
+            current_group = [marker]
+    groups.append(current_group)
+
     parts = []
     prefix = text[: markers[0].start()].strip(" /；;，,")
     if prefix:
         parts.append(prefix)
-    for index, marker in enumerate(markers):
+    for index, group in enumerate(groups):
         end = (
-            markers[index + 1].start()
-            if index + 1 < len(markers)
+            groups[index + 1][0].start()
+            if index + 1 < len(groups)
             else len(text)
         )
-        part = text[marker.start() : end].strip(" /；;，,")
-        if part:
-            parts.append(_keep_pos_with_meaning(part))
+        pos_labels = "/".join(marker.group(1) for marker in group)
+        meaning = text[group[-1].end() : end].strip(" /；;，,")
+        if meaning:
+            parts.append(f"{pos_labels}\u00A0{meaning}")
+        else:
+            parts.append(pos_labels)
     return "\n".join(parts)
 
 
