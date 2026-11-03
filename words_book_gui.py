@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import ctypes
+import re
 import sys
 import time
 import tkinter as tk
@@ -60,6 +61,43 @@ def _format_wait(seconds: float | None) -> str:
     if seconds < 86400:
         return f"{seconds / 3600:.1f} 小时"
     return f"{seconds / 86400:.1f} 天"
+
+
+_POS_MARKER = re.compile(
+    r"(?i)(?<![A-Za-z])"
+    r"((?:n|v|vt|vi|a|adj|ad|adv|prep|conj|pron|num|art|int|aux|abbr|pl)\.)"
+)
+_POS_PREFIX = re.compile(
+    r"(?i)^((?:n|v|vt|vi|a|adj|ad|adv|prep|conj|pron|num|art|int|aux|abbr|pl)\.)\s+"
+)
+
+
+def _keep_pos_with_meaning(part: str) -> str:
+    # A non-breaking space prevents Tk from orphaning "vt." on its own line.
+    return _POS_PREFIX.sub(lambda match: match.group(1) + "\u00A0", part, count=1)
+
+
+def _format_definition(text: str) -> str:
+    """Keep different parts of speech on separate lines."""
+    text = text.strip()
+    markers = list(_POS_MARKER.finditer(text))
+    if len(markers) <= 1:
+        return _keep_pos_with_meaning(text)
+
+    parts = []
+    prefix = text[: markers[0].start()].strip(" /；;，,")
+    if prefix:
+        parts.append(prefix)
+    for index, marker in enumerate(markers):
+        end = (
+            markers[index + 1].start()
+            if index + 1 < len(markers)
+            else len(text)
+        )
+        part = text[marker.start() : end].strip(" /；;，,")
+        if part:
+            parts.append(_keep_pos_with_meaning(part))
+    return "\n".join(parts)
 
 
 def _greeting() -> str:
@@ -275,6 +313,7 @@ class WordBookApp:
         self.session_words: set[str] = set()
         self.session_finished = False
         self.nav_buttons: dict[str, tk.Button] = {}
+        self.review_view: tk.Frame | None = None
         self.search_var = tk.StringVar()
         self.filter_var = tk.StringVar(value="全部单词")
         self.search_var.trace_add(
@@ -556,9 +595,9 @@ class WordBookApp:
             parent,
             text=text,
             command=command,
-            bg=COLORS["card"],
+            bg=COLORS["accent_pale"],
             fg=COLORS["text"],
-            activebackground=COLORS["accent_pale"],
+            activebackground=COLORS["accent_soft"],
             activeforeground=COLORS["accent"],
             bd=0,
             relief="flat",
@@ -572,36 +611,13 @@ class WordBookApp:
         )
         button.bind(
             "<Enter>",
-            lambda _event: button.configure(bg=COLORS["accent_pale"]),
+            lambda _event: button.configure(bg=COLORS["accent_soft"]),
         )
         button.bind(
             "<Leave>",
-            lambda _event: button.configure(bg=COLORS["card"]),
+            lambda _event: button.configure(bg=COLORS["accent_pale"]),
         )
         return button
-
-    def _ghost_button(
-        self,
-        parent: tk.Misc,
-        text: str,
-        command: Callable[[], None],
-    ) -> tk.Button:
-        return tk.Button(
-            parent,
-            text=text,
-            command=command,
-            bg=COLORS["card"],
-            fg=COLORS["muted"],
-            activebackground=COLORS["card"],
-            activeforeground=COLORS["accent"],
-            bd=0,
-            relief="flat",
-            font=(self.font_family, 9),
-            padx=8,
-            pady=7,
-            cursor="hand2",
-            highlightthickness=0,
-        )
 
     def _surface(self, parent: tk.Misc) -> tk.Frame:
         return tk.Frame(
@@ -668,6 +684,8 @@ class WordBookApp:
             self.show_library()
         elif target == "records":
             self.show_records()
+        elif target == "review":
+            self.show_review()
 
     def _refresh_sidebar(self) -> None:
         total = len(self.words)
@@ -933,6 +951,30 @@ class WordBookApp:
             font=(self.font_family, 9, "bold"),
         ).pack(side="right")
 
+    def _definition_label(
+        self,
+        parent: tk.Misc,
+        text: str,
+        resize_source: tk.Misc,
+    ) -> tk.Label:
+        label = tk.Label(
+            parent,
+            text=text,
+            bg=COLORS["card"],
+            fg=COLORS["text"],
+            font=(self.font_family, 21),
+            wraplength=760,
+            justify="center",
+        )
+        resize_source.bind(
+            "<Configure>",
+            lambda event, target=label: target.configure(
+                wraplength=max(320, event.width - 24)
+            ),
+            add="+",
+        )
+        return label
+
     def show_review(self) -> None:
         if self.page != "review":
             self.session_start_time = time.time()
@@ -970,6 +1012,7 @@ class WordBookApp:
         )
         self.review_body = tk.Frame(self.review_card, bg=COLORS["card"])
         self.review_body.pack(fill="both", expand=True, padx=40, pady=30)
+        self.review_view = None
         self._load_next_word()
 
     def _session_subtitle(self) -> str:
@@ -991,16 +1034,58 @@ class WordBookApp:
         else:
             self._render_review_question()
 
+    def _swap_review_view(self, new_view: tk.Frame) -> None:
+        old_view = self.review_view
+        self.review_view = new_view
+
+        if old_view is None or not old_view.winfo_exists():
+            new_view.place(x=20, y=0, relwidth=1, relheight=1)
+            start_x = 20
+            end_x = 0
+            old_x_end = 0
+        else:
+            old_view.pack_forget()
+            old_view.place(x=0, y=0, relwidth=1, relheight=1)
+            new_view.place(x=22, y=0, relwidth=1, relheight=1)
+            new_view.lift()
+            start_x = 22
+            end_x = 0
+            old_x_end = -8
+
+        steps = 9
+
+        def animate(step: int = 0) -> None:
+            if not new_view.winfo_exists():
+                return
+            progress = step / steps
+            eased = 1 - (1 - progress) ** 3
+            new_x = round(start_x * (1 - eased))
+            new_view.place_configure(x=new_x)
+            if (
+                old_view is not None
+                and old_view.winfo_exists()
+            ):
+                old_x = round(old_x_end * eased)
+                old_view.place_configure(x=old_x)
+            if step < steps:
+                self.root.after(16, lambda: animate(step + 1))
+                return
+            new_view.place_forget()
+            new_view.pack(fill="both", expand=True)
+            if old_view is not None and old_view.winfo_exists():
+                old_view.destroy()
+
+        animate()
+
     def _render_review_question(self) -> None:
-        for child in self.review_body.winfo_children():
-            child.destroy()
         word = self.current_word
         if word is None:
             return
         if hasattr(self, "review_session_label"):
             self.review_session_label.configure(text=self._session_subtitle())
 
-        top = tk.Frame(self.review_body, bg=COLORS["card"])
+        view = tk.Frame(self.review_body, bg=COLORS["card"])
+        top = tk.Frame(view, bg=COLORS["card"])
         top.pack(fill="x")
         is_new = word.get("stability", 0) <= 0
         status_text = "新词" if is_new else "到期复习"
@@ -1023,144 +1108,129 @@ class WordBookApp:
             font=(self.font_family, 9),
         ).pack(side="right")
 
-        center = tk.Frame(self.review_body, bg=COLORS["card"])
-        center.pack(fill="both", expand=True)
+        body = tk.Frame(view, bg=COLORS["card"])
+        body.pack(fill="both", expand=True)
+        center = tk.Frame(body, bg=COLORS["card"])
+        center.place(relx=0.5, rely=0.5, anchor="center")
         tk.Label(
             center,
             text=word["en"],
             bg=COLORS["card"],
             fg=COLORS["text"],
-            font=(self.font_family, 37, "bold"),
+            font=(self.font_family, 40, "bold"),
             wraplength=720,
             justify="center",
-        ).pack(pady=(38, 12))
+        ).pack()
+        definition_text = _format_definition(word["cn"])
 
         if not self.revealed:
             tk.Label(
                 center,
-                text="先在心里回忆它的中文释义",
+                text="根据自己的记忆情况选择一个答案",
                 bg=COLORS["card"],
                 fg=COLORS["muted"],
                 font=(self.font_family, 10),
-            ).pack()
+            ).pack(pady=(28, 0))
             tk.Label(
                 center,
-                text="快捷键  1  不认识    2  认识",
+                text="快捷键与选项序号一致",
                 bg=COLORS["card"],
                 fg=COLORS["subtle"],
                 font=(self.font_family, 8),
-            ).pack(pady=(8, 0))
+            ).pack(pady=(14, 0))
             actions = tk.Frame(center, bg=COLORS["card"])
-            actions.pack(pady=(34, 0))
-            self._secondary_button(
-                actions,
-                "还不认识",
-                lambda: self._answer_directly(False),
-            ).pack(side="left", padx=6)
+            actions.pack(pady=(54, 0))
             self._primary_button(
                 actions,
-                "认识",
+                "1  认识",
                 self._reveal_answer,
             ).pack(side="left", padx=6)
-            return
-
-        tk.Frame(center, bg=COLORS["border"], height=1).pack(
-            fill="x",
-            padx=125,
-            pady=(18, 22),
-        )
-        tk.Label(
-            center,
-            text="释义",
-            bg=COLORS["card"],
-            fg=COLORS["muted"],
-            font=(self.font_family, 8, "bold"),
-        ).pack()
-        tk.Label(
-            center,
-            text=word["cn"],
-            bg=COLORS["card"],
-            fg=COLORS["text"],
-            font=(self.font_family, 16),
-            wraplength=680,
-            justify="center",
-        ).pack(pady=(8, 12))
-
-        if not self.answer_processed:
+            self._secondary_button(
+                actions,
+                "2  不认识",
+                lambda: self._record_answer("forgotten", advance=False),
+            ).pack(side="left", padx=6)
+        elif not self.answer_processed:
+            tk.Frame(center, bg=COLORS["border"], height=1).pack(
+                fill="x",
+                padx=125,
+                pady=(25, 25),
+            )
             tk.Label(
                 center,
-                text="刚才想起来了吗？",
+                text="释义",
+                bg=COLORS["card"],
+                fg=COLORS["muted"],
+                font=(self.font_family, 8, "bold"),
+            ).pack()
+            self._definition_label(
+                center,
+                definition_text,
+                body,
+            ).pack(pady=(12, 4))
+            tk.Label(
+                center,
+                text="请选择后续操作",
                 bg=COLORS["card"],
                 fg=COLORS["muted"],
                 font=(self.font_family, 9),
-            ).pack(pady=(8, 0))
+            ).pack(pady=(22, 0))
             actions = tk.Frame(center, bg=COLORS["card"])
-            actions.pack(pady=(23, 0))
-            self._secondary_button(
-                actions,
-                "记错了",
-                lambda: self._record_answer("forgotten"),
-            ).pack(side="left", padx=6)
+            actions.pack(pady=(34, 0))
             self._primary_button(
                 actions,
-                "确实记住了",
+                "1  下一个",
                 lambda: self._record_answer("remembered"),
             ).pack(side="left", padx=6)
-            self._ghost_button(
-                center,
-                "彻底掌握，不再复习",
+            self._secondary_button(
+                actions,
+                "2  记错了",
+                lambda: self._record_answer("forgotten"),
+            ).pack(side="left", padx=6)
+            self._secondary_button(
+                actions,
+                "3  记住了",
                 lambda: self._record_answer("marked_remembered"),
-            ).pack(pady=(13, 0))
-            return
-
-        message, detail = self._answer_feedback(word)
-        tk.Label(
-            center,
-            text=message,
-            bg=COLORS["card"],
-            fg=COLORS["accent"],
-            font=(self.font_family, 11, "bold"),
-        ).pack(pady=(5, 2))
-        if self.last_proficiency_change:
-            before, after = self.last_proficiency_change
-            detail = f"{detail}  熟练度 {before} → {after}"
-        tk.Label(
-            center,
-            text=detail,
-            bg=COLORS["card"],
-            fg=COLORS["muted"],
-            font=(self.font_family, 9),
-        ).pack()
-        actions = tk.Frame(center, bg=COLORS["card"])
-        actions.pack(pady=(28, 0))
-        self._primary_button(
-            actions,
-            "下一个单词  →",
-            self._load_next_word,
-        ).pack()
+            ).pack(side="left", padx=6)
+            tk.Label(
+                center,
+                text="选择“记住了”后，这个词以后不再复习",
+                bg=COLORS["card"],
+                fg=COLORS["subtle"],
+                font=(self.font_family, 8),
+            ).pack(pady=(16, 0))
+        else:
+            tk.Frame(center, bg=COLORS["border"], height=1).pack(
+                fill="x",
+                padx=125,
+                pady=(25, 25),
+            )
+            tk.Label(
+                center,
+                text="释义",
+                bg=COLORS["card"],
+                fg=COLORS["muted"],
+                font=(self.font_family, 8, "bold"),
+            ).pack()
+            self._definition_label(
+                center,
+                definition_text,
+                body,
+            ).pack(pady=(12, 0))
+            actions = tk.Frame(center, bg=COLORS["card"])
+            actions.pack(pady=(44, 0))
+            self._primary_button(
+                actions,
+                "下一个单词",
+                self._load_next_word,
+            ).pack()
+        self._swap_review_view(view)
 
     def _reveal_answer(self) -> None:
         self.revealed = True
         self._render_review_question()
 
-    def _answer_directly(self, remembered: bool) -> None:
-        self._record_answer("remembered" if remembered else "forgotten")
-
-    def _answer_feedback(self, word: dict) -> tuple[str, str]:
-        if self.last_result == "forgotten":
-            return "已记录，这个词会更快再次出现", "再巩固一次会记得更牢。"
-        if self.last_result == "marked_remembered":
-            return "已标记为彻底掌握", "之后不会再从复习队列中抽取。"
-        stability = word.get("stability", 0)
-        if stability <= 0:
-            wait = "稍后"
-        elif stability < 1:
-            wait = f"{stability * 24:.1f} 小时后"
-        else:
-            wait = f"{stability:.1f} 天后"
-        return "已记住，复习间隔已延长", f"下次计划在 {wait}复习。"
-
-    def _record_answer(self, result: str) -> None:
+    def _record_answer(self, result: str, *, advance: bool = True) -> None:
         if self.current_word is None or self.answer_processed:
             return
         word = self.current_word
@@ -1221,14 +1291,16 @@ class WordBookApp:
                 parent=self.root,
             )
         self._refresh_sidebar()
-        self._render_review_question()
+        if advance:
+            self._load_next_word()
+        else:
+            self._render_review_question()
 
     def _render_review_empty(self) -> None:
-        for child in self.review_body.winfo_children():
-            child.destroy()
         if hasattr(self, "review_session_label"):
             self.review_session_label.configure(text=self._session_subtitle())
-        center = tk.Frame(self.review_body, bg=COLORS["card"])
+        view = tk.Frame(self.review_body, bg=COLORS["card"])
+        center = tk.Frame(view, bg=COLORS["card"])
         center.pack(fill="both", expand=True)
         tk.Label(
             center,
@@ -1274,6 +1346,7 @@ class WordBookApp:
             "回到首页",
             lambda: self._navigate("home"),
         ).pack(side="left", padx=5)
+        self._swap_review_view(view)
 
     def _finish_session(self) -> None:
         if self.session_finished:
@@ -1617,7 +1690,7 @@ class WordBookApp:
         result_labels = {
             "remembered": "记住了",
             "forgotten": "没想起来",
-            "marked_remembered": "彻底掌握",
+            "marked_remembered": "记住了（不再复习）",
         }
         for row in reversed(rows[-30:]):
             if len(row) < 6:
@@ -1674,14 +1747,14 @@ class WordBookApp:
             return
         if not self.revealed:
             if key == "1":
-                self._answer_directly(False)
-            elif key == "2":
                 self._reveal_answer()
+            elif key == "2":
+                self._record_answer("forgotten", advance=False)
             return
         if key == "1":
-            self._record_answer("forgotten")
-        elif key == "2":
             self._record_answer("remembered")
+        elif key == "2":
+            self._record_answer("forgotten")
         elif key == "3":
             self._record_answer("marked_remembered")
 
