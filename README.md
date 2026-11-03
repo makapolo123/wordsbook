@@ -29,6 +29,8 @@
 - statistic_data.txt 自动生成，追加保存每次复习的统计数据
 - word_record.csv    自动生成，追加保存每个单词的复习明细
 - README.md          项目说明文档
+- docs/              **手机网页版（PWA）**，纯静态，可直接部署到 GitHub Pages
+- tools/             开发辅助脚本（算法对照测试、图标生成），不参与部署
 
 <br>
 
@@ -58,6 +60,53 @@ python words_book.py --cli
 ```
 
 如果使用的是旧版 words.json，第一次启动会自动按历史复习记录迁移记忆强度，并生成 words.json.bak 备份。
+
+<br>
+
+## 手机 / 网页版
+
+`docs/` 是一份与桌面版共用同一套记忆算法和存档格式的网页应用，可以装到手机主屏，全屏运行、离线可用。
+
+访问地址：<https://makapolo123.github.io/wordsbook/>
+
+### 首次使用
+
+1. 电脑上把 `words.json`（如需带明细再加 `word_record.csv`）通过微信文件传输助手、网盘等方式发到手机
+2. 手机浏览器打开上面的链接 → 点「选文件导入」→ 选择刚收到的文件
+3. 导入成功首页会显示词库总数和掌握进度，核对无误后点浏览器的「添加到主屏幕」
+
+iPhone 用 Safari 打开后点「分享 → 添加到主屏幕」；安卓在 Chrome 菜单里选「安装应用」。
+
+### 数据存放
+
+手机端的词库存 `localStorage`，复习明细存 `IndexedDB`，都只在本机，不经过任何服务器。因此：
+
+- 换手机、清空浏览器数据前，先在「学习记录 → 导出备份」里导出一份
+- iOS 对长期不访问的站点可能清理存储，装到主屏并定期导出可避免
+- 导出的 `words.json` 字段与桌面版完全一致，可以直接覆盖电脑上的同名文件；`word_record.csv`、`statistic_data.txt` 同理
+
+### 本地调试
+
+```bash
+# 在项目根目录启动，之后浏览器打开 http://localhost:8000/docs/
+python -m http.server 8000
+```
+
+`localhost` 属于安全上下文，Service Worker 能正常注册，可在开发者工具里验证离线缓存。
+
+### 改动后的自检
+
+改了 `docs/js/core.js` 里的算法时，务必用对照测试确认与 Python 版本完全一致：
+
+```bash
+# 1. 用真实 Python 代码生成基准（需要能 import tkinter 的解释器，通常是项目的 .venv）
+.venv/Scripts/python.exe tools/probe.py
+
+# 2. Node 端逐条比对，要求 0 差异
+node tools/verify.mjs
+```
+
+基准覆盖 5 万余项：舍入、记忆强度更新、熟练度换算、真实 965 词的到期集合与抽样结果、释义分行、状态文案、近 7 天统计。
 
 <br>
 
