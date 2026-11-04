@@ -899,15 +899,33 @@ p {
 }
 
 .review__word {
-  font-size: clamp(32px, 9vw, 52px);
+  font-size: clamp(42px, 13vw, 72px);
   font-weight: 700;
-  line-height: 1.2;
-  letter-spacing: -0.02em;
+  line-height: 1.12;
+  letter-spacing: -0.03em;
+  color: var(--text);
   word-break: break-word;
 }
 
+/* 显示释义后单词让位给释义，但仍保持最大字号层级 */
+.review__word--compact {
+  font-size: clamp(34px, 10vw, 54px);
+  letter-spacing: -0.025em;
+}
+
+/* 短语与超长单词降一档，保证不溢出 */
+.review__word--long {
+  font-size: clamp(30px, 9.4vw, 56px);
+  letter-spacing: -0.02em;
+  line-height: 1.18;
+}
+
+.review__word--compact.review__word--long {
+  font-size: clamp(26px, 7.2vw, 42px);
+}
+
 .review__tip {
-  margin-top: 18px;
+  margin-top: 16px;
   font-size: 12.5px;
   color: var(--muted);
 }
@@ -948,48 +966,80 @@ p {
 }
 
 .review__divider {
-  width: 84%;
+  width: 68%;
   height: 1px;
-  margin: 20px 0 16px;
+  margin: 22px 0 4px;
   background: var(--border);
 }
 
-.review__label {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  color: var(--subtle);
-}
-
 .review__def {
-  margin-top: 10px;
-  font-size: clamp(16px, 4.6vw, 20px);
-  line-height: 1.6;
+  margin-top: 8px;
+  font-size: clamp(21px, min(6.2vw, 3.4vh), 30px);
+  line-height: 1.5;
   color: var(--text);
-  white-space: pre-line;
+  max-width: 100%;
 }
 
-.review__def div + div {
-  margin-top: 4px;
+.review__defrow {
+  display: block;
+  text-align: center;
+  padding: 2px 0;
+}
+
+.review__defrow + .review__defrow {
+  margin-top: 8px;
+}
+
+/* 词性做小标签，释义本体才是视觉主体 */
+.review__pos {
+  display: inline-block;
+  margin-right: 7px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--accent-pale);
+  color: var(--accent);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  line-height: 1.5;
+  vertical-align: 0.16em;
+  white-space: nowrap;
+}
+
+.review__meaning {
+  font-weight: 500;
+  letter-spacing: 0.005em;
 }
 
 .review__actions {
   display: flex;
-  flex-direction: column;
-  gap: 9px;
-  padding-top: 4px;
-}
-
-.review__actions--row {
   flex-direction: row;
+  justify-content: center;
+  gap: 6px;
+  padding-top: 10px;
 }
 
-.review__actions--row .btn {
-  flex: 1;
+/* 操作键保持安静：无底色、无描边、弱对比，不与词义抢注意力 */
+.btn--quiet {
+  min-height: 36px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--subtle);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.btn--quiet:active {
+  background: var(--accent-pale);
+  color: var(--muted);
+  transform: none;
 }
 
 .review__note {
-  margin-top: 10px;
+  margin-top: 4px;
   font-size: 11px;
   color: var(--subtle);
   text-align: center;
@@ -1289,6 +1339,10 @@ p {
 
   .review__actions .btn {
     min-width: 150px;
+  }
+
+  .review__actions .btn--quiet {
+    min-width: 0;
   }
 
   .review__actions--stack {

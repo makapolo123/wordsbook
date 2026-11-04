@@ -4,7 +4,7 @@
  * 所有路径都相对本文件（站点部署在 /wordsbook/ 子路径下）。
  */
 
-const VERSION = 'v1.1.0';
+const VERSION = 'v1.2.0';
 const CACHE = `wb-shell-${VERSION}`;
 
 const PRECACHE = [

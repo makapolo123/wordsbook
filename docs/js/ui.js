@@ -402,6 +402,17 @@ export function renderSessionLabel(session) {
 const SWIPE_ICON =
   '<svg class="swipe-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 15l7-7 7 7"/></svg>';
 
+// 释义行形如 “vt. 组织/使有条理”，把词性拆成小标签、释义单独放大，
+// 只影响显示，不改动 core.formatDefinition 的分行结果。
+const POS_HEAD = /^((?:n|v|vt|vi|a|adj|ad|adv|prep|conj|pron|num|art|int|aux|abbr|pl)\.)[\s\u00A0]*/i;
+
+function definitionLine(line) {
+  const match = line.match(POS_HEAD);
+  if (!match) return `<div class="review__defrow"><span class="review__meaning">${esc(line)}</span></div>`;
+  const meaning = line.slice(match[0].length);
+  return `<div class="review__defrow"><span class="review__pos">${esc(match[1])}</span><span class="review__meaning">${esc(meaning)}</span></div>`;
+}
+
 // 触摸结束后浏览器会补发一套兼容鼠标事件，若不加压制，同一次滑动会被算成两次。
 // 这套回放在手指离开后约 450ms 才开始，所以每个触摸事件都要刷新时间戳。
 let lastTouchAt = 0;
@@ -509,54 +520,46 @@ export function renderReviewQuestion({ word, revealed, processed, handlers }) {
       <span class="review__pro">熟练度 ${word.proficiency ?? core.MIN_PRO}</span>
     </div>`;
 
-  const wordHtml = `<div class="review__word">${esc(word.en)}</div>`;
+  // 短语或长单词缩小一档，避免在窄屏上折成三行
+  const longWord = word.en.length > 12 ? ' review__word--long' : '';
+  const wordHtml = `<div class="review__word${revealed ? ' review__word--compact' : ''}${longWord}">${esc(word.en)}</div>`;
   const defHtml = `
     <div class="review__divider"></div>
-    <p class="review__label">释义</p>
-    <div class="review__def" id="review-def">${definition
-      .map((line) => `<div>${esc(line)}</div>`)
-      .join('')}</div>`;
+    <div class="review__def" id="review-def">${definition.map(definitionLine).join('')}</div>`;
 
   let center;
-  let actions;
+  let actions = '';
+  let note = '';
 
   const tip = (text) => `<p class="review__tip review__tip--swipe">${SWIPE_ICON}${text}</p>`;
 
   if (!revealed) {
     center = `${wordHtml}${tip('上滑查看释义')}`;
     actions = `<div class="review__actions">
-      <button class="btn btn--block" data-act="know" type="button">1　认识</button>
-      <button class="btn btn--secondary btn--block" data-act="unknown" type="button">2　不认识</button>
+      <button class="btn btn--quiet" data-act="unknown" type="button">不认识</button>
     </div>`;
   } else if (!processed) {
-    center = `${wordHtml}${defHtml}${tip('上滑进入下一个单词')}`;
+    center = `${wordHtml}${defHtml}${tip('上滑看下一个')}`;
     actions = `<div class="review__actions">
-      <button class="btn btn--block" data-act="next" type="button">1　下一个</button>
-      <button class="btn btn--secondary btn--block" data-act="forgot" type="button">2　记错了</button>
-      <button class="btn btn--secondary btn--block" data-act="mark" type="button">3　记住了</button>
-    </div>
-    <p class="review__note">选择“记住了”后，这个词以后不再复习</p>`;
+      <button class="btn btn--quiet" data-act="forgot" type="button">记错了</button>
+      <button class="btn btn--quiet" data-act="mark" type="button">记住了</button>
+    </div>`;
+    note = `<p class="review__note">“记住了”之后不再复习这个词</p>`;
   } else {
     center = `${wordHtml}${defHtml}${tip('上滑继续')}`;
-    actions = `<div class="review__actions">
-      <button class="btn btn--block" data-act="advance" type="button">下一个单词</button>
-    </div>`;
   }
 
   host.innerHTML = `<div class="review__card">
     ${meta}
     <div class="review__center">${center}</div>
-    ${actions}
+    ${actions}${note}
   </div>`;
 
   const bind = (act, fn) =>
     host.querySelector(`[data-act="${act}"]`)?.addEventListener('click', fn);
-  bind('know', handlers.reveal);
   bind('unknown', handlers.unknown);
-  bind('next', handlers.remembered);
   bind('forgot', handlers.forgotten);
   bind('mark', handlers.marked);
-  bind('advance', handlers.advance);
 
   const card = host.querySelector('.review__card');
   if (card) {
