@@ -859,6 +859,17 @@ p {
   background: var(--card);
   min-height: 0;
   overflow: hidden;
+  touch-action: none;
+  transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1), opacity 240ms ease;
+}
+
+.review__card.is-dragging {
+  transition: none;
+  user-select: none;
+}
+
+.review__card.is-leaving {
+  transition: transform 190ms ease-in, opacity 190ms ease-in;
 }
 
 .review__meta {
@@ -883,6 +894,8 @@ p {
   min-height: 0;
   padding: 14px 0;
   overflow-y: auto;
+  touch-action: none;
+  overscroll-behavior: contain;
 }
 
 .review__word {
@@ -897,6 +910,41 @@ p {
   margin-top: 18px;
   font-size: 12.5px;
   color: var(--muted);
+}
+
+.review__tip--swipe {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.swipe-icon {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .swipe-icon {
+    animation: swipe-bob 1.8s ease-in-out infinite;
+  }
+
+  @keyframes swipe-bob {
+    0%,
+    100% {
+      transform: translateY(2px);
+      opacity: 0.65;
+    }
+    50% {
+      transform: translateY(-2px);
+      opacity: 1;
+    }
+  }
 }
 
 .review__divider {

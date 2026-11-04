@@ -430,14 +430,15 @@ function onKey(event) {
   if (event.target instanceof HTMLInputElement) return;
   const key = event.key;
   if (app.processed) {
-    if (key === 'Enter' || key === ' ') {
+    if (key === 'Enter' || key === ' ' || key === 'ArrowUp') {
       event.preventDefault();
       loadNextWord();
     }
     return;
   }
   if (!app.revealed) {
-    if (key === '1') {
+    if (key === '1' || key === 'ArrowUp') {
+      event.preventDefault();
       app.revealed = true;
       redrawReview();
     } else if (key === '2') {
@@ -445,7 +446,10 @@ function onKey(event) {
     }
     return;
   }
-  if (key === '1') recordAnswer('remembered', true);
+  if (key === 'ArrowUp') {
+    event.preventDefault();
+    recordAnswer('remembered', true);
+  } else if (key === '1') recordAnswer('remembered', true);
   else if (key === '2') recordAnswer('forgotten', true);
   else if (key === '3') recordAnswer('marked_remembered', true);
 }

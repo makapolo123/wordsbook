@@ -399,6 +399,104 @@ export function renderSessionLabel(session) {
     : '按记忆强度自动安排，随时可以结束';
 }
 
+const SWIPE_ICON =
+  '<svg class="swipe-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 15l7-7 7 7"/></svg>';
+
+// 触摸结束后浏览器会补发一套兼容鼠标事件，若不加压制，同一次滑动会被算成两次。
+// 这套回放在手指离开后约 450ms 才开始，所以每个触摸事件都要刷新时间戳。
+let lastTouchAt = 0;
+
+const markTouch = (event) => {
+  if (event.pointerType !== 'mouse') lastTouchAt = Date.now();
+};
+
+// 上滑手势：卡片跟随手指上移，松手超过阈值才执行动作，未过阈值回弹。
+function attachSwipeReview(card, getAction) {
+  let active = false;
+  let decided = false;
+  let startY = 0;
+  let startX = 0;
+  let travel = 0;
+
+  const limit = () => Math.max(54, Math.min(112, card.clientHeight * 0.16));
+
+  const clear = () => {
+    card.classList.remove('is-dragging', 'is-leaving');
+    card.style.transform = '';
+    card.style.opacity = '';
+  };
+
+  card.addEventListener('pointerdown', (event) => {
+    markTouch(event);
+    if (!card.isConnected) return;
+    if (event.pointerType === 'mouse' && (event.button !== 0 || Date.now() - lastTouchAt < 1000)) {
+      return;
+    }
+    if (event.target.closest('button, a, input, textarea, select')) return;
+    active = true;
+    decided = false;
+    startY = event.clientY;
+    startX = event.clientX;
+    travel = 0;
+    card.classList.add('is-dragging');
+    card.style.transform = '';
+    card.style.opacity = '';
+  });
+
+  card.addEventListener('pointermove', (event) => {
+    markTouch(event);
+    if (!active) return;
+    const deltaY = event.clientY - startY;
+    const deltaX = event.clientX - startX;
+    if (!decided) {
+      if (Math.abs(deltaY) < 6 && Math.abs(deltaX) < 6) return;
+      if (Math.abs(deltaX) > Math.abs(deltaY)) {
+        active = false;
+        clear();
+        return;
+      }
+      decided = true;
+      if (card.setPointerCapture) card.setPointerCapture(event.pointerId);
+    }
+    const edge = limit();
+    const distance = Math.abs(Math.min(0, deltaY));
+    travel = distance <= edge ? distance : edge + (distance - edge) * 0.45;
+    if (event.cancelable) event.preventDefault();
+    card.style.transform = `translateY(${-travel}px)`;
+    card.style.opacity = String(Math.max(0.45, 1 - (travel / (edge * 1.8)) * 0.3));
+  });
+
+  const settle = () => {
+    if (!active) return;
+    active = false;
+    const passed = travel >= limit() * 0.92;
+    card.classList.remove('is-dragging');
+    if (!passed) {
+      clear();
+      return;
+    }
+    card.classList.add('is-leaving');
+    void card.offsetHeight;
+    card.style.transform = 'translateY(-118%)';
+    card.style.opacity = '0';
+    window.setTimeout(() => {
+      getAction()();
+      // 动作被拦截（例如写入失败）时卡片不会被重绘，需要恢复原状
+      if (card.isConnected) clear();
+    }, 180);
+  };
+
+  card.addEventListener('pointerup', (event) => {
+    markTouch(event);
+    settle();
+  });
+  card.addEventListener('pointercancel', (event) => {
+    markTouch(event);
+    active = false;
+    clear();
+  });
+}
+
 export function renderReviewQuestion({ word, revealed, processed, handlers }) {
   const host = $('#review-body');
   if (!host) return;
@@ -422,22 +520,24 @@ export function renderReviewQuestion({ word, revealed, processed, handlers }) {
   let center;
   let actions;
 
+  const tip = (text) => `<p class="review__tip review__tip--swipe">${SWIPE_ICON}${text}</p>`;
+
   if (!revealed) {
-    center = `${wordHtml}<p class="review__tip">根据自己的记忆情况选择一个答案</p>`;
+    center = `${wordHtml}${tip('上滑查看释义')}`;
     actions = `<div class="review__actions">
       <button class="btn btn--block" data-act="know" type="button">1　认识</button>
       <button class="btn btn--secondary btn--block" data-act="unknown" type="button">2　不认识</button>
     </div>`;
   } else if (!processed) {
-    center = `${wordHtml}${defHtml}<p class="review__tip" style="margin-top:20px">请选择后续操作</p>`;
+    center = `${wordHtml}${defHtml}${tip('上滑进入下一个单词')}`;
     actions = `<div class="review__actions">
       <button class="btn btn--block" data-act="next" type="button">1　下一个</button>
       <button class="btn btn--secondary btn--block" data-act="forgot" type="button">2　记错了</button>
       <button class="btn btn--secondary btn--block" data-act="mark" type="button">3　记住了</button>
     </div>
-    <p class="review__note">选择"记住了"后，这个词以后不再复习</p>`;
+    <p class="review__note">选择“记住了”后，这个词以后不再复习</p>`;
   } else {
-    center = `${wordHtml}${defHtml}`;
+    center = `${wordHtml}${defHtml}${tip('上滑继续')}`;
     actions = `<div class="review__actions">
       <button class="btn btn--block" data-act="advance" type="button">下一个单词</button>
     </div>`;
@@ -457,6 +557,12 @@ export function renderReviewQuestion({ word, revealed, processed, handlers }) {
   bind('forgot', handlers.forgotten);
   bind('mark', handlers.marked);
   bind('advance', handlers.advance);
+
+  const card = host.querySelector('.review__card');
+  if (card) {
+    const action = !revealed ? handlers.reveal : processed ? handlers.advance : handlers.remembered;
+    attachSwipeReview(card, () => action);
+  }
 }
 
 export function renderReviewEmpty({ title, detail, handlers }) {
