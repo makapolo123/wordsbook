@@ -5,10 +5,12 @@ import random
 import shutil
 import time
 from datetime import datetime
+from pathlib import Path
 
-WORDS_SAVE_FILE = "words.json"         # 单词本地存档文件
-STATISTIC_FILE = "statistic_data.txt"  # 复习数据文件
-RECORD_DATA_FILE = "word_record.csv"   # 复习的单词数据
+BASE_DIR = Path(__file__).resolve().parent
+WORDS_SAVE_FILE = BASE_DIR / "words.json"         # 单词本地存档文件
+STATISTIC_FILE = BASE_DIR / "statistic_data.txt"  # 复习数据文件
+RECORD_DATA_FILE = BASE_DIR / "word_record.csv"   # 复习的单词数据
 
 # ===== 熟练度参数 =====
 STD_PRO = 90         # 达标熟练度（约对应 90 天记忆强度，即真正掌握）
@@ -99,7 +101,7 @@ def migrate_stability(legacy_words):
     迁移前备份原存档，方便回退。"""
     print("检测到旧版存档，正在按历史复习记录迁移记忆强度...")
     try:
-        shutil.copyfile(WORDS_SAVE_FILE, WORDS_SAVE_FILE + ".bak")
+        shutil.copyfile(WORDS_SAVE_FILE, str(WORDS_SAVE_FILE) + ".bak")
         print(f"已备份原存档：{WORDS_SAVE_FILE}.bak")
     except OSError as err:
         print("备份原存档失败：", err)
@@ -496,4 +498,11 @@ def main_menu():
             print("输入无效，请重新输入！")
             
 if __name__ == "__main__":
-    main_menu()
+    import sys
+
+    if "--cli" in sys.argv:
+        main_menu()
+    else:
+        from words_book_gui import launch_app
+
+        launch_app()

@@ -26,3 +26,12 @@ word_record.csv
 
 # 备份文件
 *.bak
+
+# 手机版的验证产物与本地快照（含真实进度，不能进仓库）
+tools/fixtures/
+_backup_before_web/
+wordsbook-backup*.json
+
+# 防止误提交网页端的种子数据
+docs/_seed*
+docs/data/

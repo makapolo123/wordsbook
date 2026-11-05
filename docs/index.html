@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>词间 · 单词记忆助手</title>
+  <meta name="description" content="按记忆强度调度的单词背诵工具，进度只保存在本机。" />
+  <meta name="theme-color" content="#355F49" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="词间" />
+  <meta name="format-detection" content="telephone=no" />
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon-180.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png" />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="notice" id="notice" hidden></div>
+
+  <div class="app">
+    <!-- 桌面端侧栏；移动端隐藏，靠底部标签栏导航 -->
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand__mark">词</span>
+        <span class="brand__text">
+          <strong>词间</strong>
+          <small>SPACED REVIEW</small>
+        </span>
+      </div>
+      <nav class="sidebar__nav" id="sidebar-nav">
+        <button class="navlink is-active" data-target="home" type="button">今日学习</button>
+        <button class="navlink" data-target="library" type="button">单词库</button>
+        <button class="navlink" data-target="records" type="button">学习记录</button>
+      </nav>
+      <div class="sidebar__card">
+        <p class="sidebar__label">总体进度</p>
+        <p class="sidebar__value" id="side-summary">0 / 0 已掌握</p>
+        <div class="meter"><i id="side-meter" style="width:0%"></i></div>
+        <p class="sidebar__due" id="side-due">0 个待复习</p>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <section class="view is-active" id="view-home" data-view="home">
+        <header class="page-head">
+          <div>
+            <h1 id="home-title">今日学习</h1>
+            <p class="sub" id="home-date"></p>
+          </div>
+        </header>
+        <div class="stack" id="home-body"></div>
+      </section>
+
+      <section class="view" id="view-library" data-view="library">
+        <header class="page-head">
+          <div>
+            <h1>单词库</h1>
+            <p class="sub" id="library-sub"></p>
+          </div>
+          <button class="btn btn--ghost btn--sm" id="library-import" type="button">导入 TXT</button>
+        </header>
+        <div class="toolbar">
+          <input class="search" id="search-input" type="search" placeholder="搜索单词或释义"
+                 inputmode="search" autocomplete="off" autocapitalize="off" spellcheck="false" />
+          <div class="chips" id="filter-chips" role="tablist">
+            <button class="chip is-active" data-filter="全部单词" type="button">全部</button>
+            <button class="chip" data-filter="待复习" type="button">待复习</button>
+            <button class="chip" data-filter="新词" type="button">新词</button>
+            <button class="chip" data-filter="已掌握" type="button">已掌握</button>
+          </div>
+          <p class="toolbar__count" id="library-count"></p>
+        </div>
+        <div class="wordlist" id="word-list"></div>
+        <div class="sentinel" id="list-sentinel" aria-hidden="true"></div>
+      </section>
+
+      <section class="view" id="view-records" data-view="records">
+        <header class="page-head">
+          <div>
+            <h1>学习记录</h1>
+            <p class="sub">回看最近的复习节奏与答题情况</p>
+          </div>
+        </header>
+        <div class="stack" id="records-body"></div>
+      </section>
+    </main>
+
+    <nav class="tabbar" id="tabbar">
+      <button class="tab is-active" data-target="home" type="button">
+        <span class="tab__icon">◎</span>
+        <span class="tab__label">今日</span>
+        <span class="tab__badge" id="tab-badge" hidden>0</span>
+      </button>
+      <button class="tab" data-target="library" type="button">
+        <span class="tab__icon">▤</span>
+        <span class="tab__label">词库</span>
+      </button>
+      <button class="tab" data-target="records" type="button">
+        <span class="tab__icon">◷</span>
+        <span class="tab__label">记录</span>
+      </button>
+    </nav>
+  </div>
+
+  <!-- 复习：全屏浮层 -->
+  <div class="review" id="review" hidden>
+    <header class="review__bar">
+      <button class="linkbtn" id="review-exit" type="button">结束本轮</button>
+      <span class="review__session" id="review-session"></span>
+    </header>
+    <div class="review__body" id="review-body"></div>
+  </div>
+
+  <!-- 底部抽屉：词条详情 / 数据管理 -->
+  <div class="sheet" id="sheet" hidden>
+    <div class="sheet__mask" data-close="1"></div>
+    <div class="sheet__panel" id="sheet-panel" role="dialog" aria-modal="true"></div>
+  </div>
+
+  <div class="toast" id="toast" hidden></div>
+
+  <input type="file" id="file-input" accept=".json,.csv,.txt,application/json,text/csv,text/plain"
+         multiple hidden />
+
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>
