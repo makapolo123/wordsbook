@@ -1,0 +1,6 @@
+{
+  "name": "wordsbook-web",
+  "private": true,
+  "type": "module",
+  "description": "词间 · 手机端单词记忆助手（静态 PWA）"
+}
