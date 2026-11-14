@@ -12,6 +12,7 @@ const app = {
   currentWord: null,
   revealed: false,
   processed: false,
+  isRepeat: false,
   query: '',
   filter: '全部单词',
   filtered: [],
@@ -218,6 +219,8 @@ function newSession() {
     newWords: 0,
     words: [],
     finished: false,
+    // 本轮巩固队列：只随会话走，不写入 words.json
+    state: core.newSessionState(),
   };
 }
 
@@ -239,7 +242,9 @@ function startReview() {
 function loadNextWord() {
   app.revealed = false;
   app.processed = false;
-  app.currentWord = core.pickRandomWord(words(), now());
+  app.currentWord = core.sessionPick(app.session.state, words(), now());
+  const entry = core.sessionEntry(app.session.state, app.currentWord);
+  app.isRepeat = Boolean(entry && entry.seen > 1);
   if (!app.currentWord) {
     renderReviewDone();
     return;
@@ -249,6 +254,7 @@ function loadNextWord() {
     word: app.currentWord,
     revealed: false,
     processed: false,
+    isRepeat: app.isRepeat,
     handlers: reviewHandlers(),
   });
 }
@@ -276,6 +282,7 @@ function redrawReview() {
     word: app.currentWord,
     revealed: app.revealed,
     processed: app.processed,
+    isRepeat: app.isRepeat,
     handlers: reviewHandlers(),
   });
 }
@@ -338,6 +345,7 @@ function recordAnswer(result, advance) {
   else word.success_count = (word.success_count ?? 0) + 1;
 
   word.last_review = stamp;
+  core.sessionNoteAnswer(app.session.state, word, result);
   app.session.reviewCount += 1;
   if (result === 'remembered') app.session.rememberedCount += 1;
   if (!app.session.words.includes(word.en)) app.session.words.push(word.en);
@@ -377,6 +385,7 @@ function finishSession() {
       session.rememberedCount,
       session.words.length,
       session.newWords,
+      session.state?.repeats ?? 0,
     );
     store.appendSessionBlock(block);
   }
@@ -565,6 +574,7 @@ async function boot() {
         orphan.rememberedCount,
         (orphan.words || []).length,
         orphan.newWords,
+        orphan.state?.repeats ?? 0,
       ),
     );
   }

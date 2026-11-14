@@ -326,6 +326,8 @@ class WordBookApp:
         self.session_new_words = 0
         self.session_words: set[str] = set()
         self.session_finished = False
+        self.review_state = core.new_session_state()
+        self.current_is_repeat = False
         self.nav_buttons: dict[str, tk.Button] = {}
         self.review_view: tk.Frame | None = None
         self.search_var = tk.StringVar()
@@ -997,6 +999,8 @@ class WordBookApp:
             self.session_new_words = 0
             self.session_words = set()
             self.session_finished = False
+            self.review_state = core.new_session_state()
+            self.current_is_repeat = False
         self.page = "review"
         self._set_active_nav("")
         self._clear_content()
@@ -1031,10 +1035,13 @@ class WordBookApp:
 
     def _session_subtitle(self) -> str:
         if self.session_review_count:
-            return (
+            text = (
                 f"本轮已复习 {self.session_review_count} 次 · "
                 f"记住 {self.session_remembered_count} 次"
             )
+            if self.review_state["repeats"]:
+                text += f" · 巩固 {self.review_state['repeats']} 次"
+            return text
         return "按记忆强度自动安排，随时可以结束"
 
     def _load_next_word(self) -> None:
@@ -1042,7 +1049,9 @@ class WordBookApp:
         self.revealed = False
         self.last_result = None
         self.last_proficiency_change = None
-        self.current_word = core.pick_random_word()
+        self.current_word = core.session_pick(self.review_state)
+        entry = core.session_entry(self.review_state, self.current_word)
+        self.current_is_repeat = bool(entry and entry.get("seen", 0) > 1)
         if self.current_word is None:
             self._render_review_empty()
         else:
@@ -1102,9 +1111,18 @@ class WordBookApp:
         top = tk.Frame(view, bg=COLORS["card"])
         top.pack(fill="x")
         is_new = word.get("stability", 0) <= 0
-        status_text = "新词" if is_new else "到期复习"
-        status_bg = COLORS["warning_soft"] if is_new else COLORS["accent_soft"]
-        status_fg = COLORS["warning"] if is_new else COLORS["accent"]
+        if self.current_is_repeat:
+            status_text = "巩固"
+            status_bg = COLORS["accent_pale"]
+            status_fg = COLORS["accent"]
+        elif is_new:
+            status_text = "新词"
+            status_bg = COLORS["warning_soft"]
+            status_fg = COLORS["warning"]
+        else:
+            status_text = "到期复习"
+            status_bg = COLORS["accent_soft"]
+            status_fg = COLORS["accent"]
         tk.Label(
             top,
             text=status_text,
@@ -1274,6 +1292,7 @@ class WordBookApp:
             word["success_count"] = word.get("success_count", 0) + 1
 
         word["last_review"] = now
+        core.session_note_answer(self.review_state, word, result)
         self.session_review_count += 1
         if result == "remembered":
             self.session_remembered_count += 1
@@ -1377,6 +1396,7 @@ class WordBookApp:
                     self.session_remembered_count,
                     self.session_words,
                     self.session_new_words,
+                    self.review_state["repeats"],
                 )
             except OSError:
                 pass

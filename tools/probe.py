@@ -291,6 +291,233 @@ def probe_fuzz() -> None:
     dump("fuzz.json", {"cases": cases})
 
 
+def session_words(anchor: float, specs: list[dict]) -> list[dict]:
+    """按规格生成一轮复习用的词库（每个 case 用新副本，避免互相污染）。"""
+    words = []
+    for spec in specs:
+        first = spec.get("first", 0)
+        last = spec.get("last", 0)
+        words.append({
+            "en": spec["en"],
+            "cn": spec["en"],
+            "proficiency": spec["p"],
+            "stability": spec["s"],
+            "ease": spec["e"],
+            "first_review": 0 if not first else anchor - first * 86400,
+            "last_review": 0 if not last else anchor - last * 86400,
+            "fail_count": spec.get("f", 0),
+            "success_count": spec.get("t", 0),
+        })
+    return words
+
+
+def session_randoms(count: int = 400) -> list[float]:
+    """固定伪随机序列：Python / JS 两侧共用同一批 u 值，保证可复现。"""
+    values = []
+    seed = 20261114
+    for _ in range(count):
+        seed = (seed * 1103515245 + 12345) % (2 ** 31)
+        values.append(seed / (2 ** 31))
+    return values
+
+
+def simulate_answer(word: dict, result: str, now: float) -> None:
+    """复刻 GUI 的答题更新规则（不写文件），让本轮计划看到真实的熟练度。"""
+    if result == "marked_remembered":
+        word["proficiency"] = 101
+    else:
+        word["stability"], word["ease"] = core.apply_answer(
+            word.get("stability", 0),
+            word.get("ease", core.EASE_DEFAULT),
+            result == "remembered",
+        )
+        word["proficiency"] = core.proficiency_from_stability(word["stability"])
+    if word.get("first_review", 0) == 0:
+        word["first_review"] = now
+    if result == "forgotten":
+        word["fail_count"] = word.get("fail_count", 0) + 1
+    else:
+        word["success_count"] = word.get("success_count", 0) + 1
+    word["last_review"] = now
+
+
+def probe_session() -> None:
+    """本轮巩固：把“抽词 → 答题 → 计划更新”整轮序列导出，供 JS 侧逐条复现。"""
+    anchor = 1762000000.0
+    randoms = session_randoms()
+
+    mixed = [
+        {"en": "alpha", "p": 50, "s": 0.0, "e": 2.5},
+        {"en": "bravo", "p": 50, "s": 0.0, "e": 2.5},
+        {"en": "charlie", "p": 55, "s": 0.25, "e": 1.5, "f": 4, "t": 2, "first": 30, "last": 30},
+        {"en": "delta", "p": 72, "s": 3.0, "e": 2.2, "f": 1, "t": 5, "first": 60, "last": 60},
+        {"en": "echo", "p": 85, "s": 60.0, "e": 2.7, "f": 0, "t": 8, "first": 200, "last": 200},
+        {"en": "foxtrot", "p": 95, "s": 200.0, "e": 2.9, "f": 0, "t": 20, "first": 400, "last": 400},
+    ]
+    new_only = [
+        {"en": "golf", "p": 50, "s": 0.0, "e": 2.5},
+        {"en": "hotel", "p": 50, "s": 0.0, "e": 2.5},
+    ]
+    new_fails = [
+        {"en": "india", "p": 50, "s": 0.0, "e": 2.5},
+        {"en": "juliet", "p": 58, "s": 0.5, "e": 1.7, "f": 3, "t": 1, "first": 20, "last": 20},
+    ]
+    budget = [
+        {"en": f"hard{index}", "p": 52 + index, "s": 0.25, "e": 1.5 + index * 0.02,
+         "f": 4, "t": 1, "first": 30, "last": 30}
+        for index in range(6)
+    ]
+    wide = [
+        {"en": f"wide{index}", "p": 70 + index % 10, "s": 10.0, "e": 2.3,
+         "f": index % 3, "t": 5, "first": 40, "last": 20}
+        for index in range(20)
+    ]
+    wide.append({"en": "wide-new", "p": 50, "s": 0.0, "e": 2.5})
+
+    scenarios = [
+        {
+            "name": "mixed",
+            "specs": mixed,
+            "steps": 30,
+            "answers": ["remembered", "forgotten", "remembered", "remembered", "forgotten"] * 8,
+        },
+        {
+            "name": "new-only",
+            "specs": new_only,
+            "steps": 12,
+            "answers": ["remembered"] * 12,
+        },
+        {
+            "name": "new-fails",
+            "specs": new_fails,
+            "steps": 12,
+            "answers": ["forgotten", "forgotten", "remembered", "remembered"] * 4,
+        },
+        {
+            "name": "budget",
+            "specs": budget,
+            "steps": 60,
+            "answers": ["remembered", "forgotten"] * 40,
+        },
+        {
+            "name": "wide",
+            "specs": wide,
+            "steps": 40,
+            "answers": ["remembered", "remembered", "forgotten", "remembered"] * 10,
+        },
+        {
+            "name": "mastered-only",
+            "specs": [{"en": "kilo", "p": 95, "s": 200.0, "e": 2.9, "f": 0, "t": 20,
+                       "first": 400, "last": 400}],
+            "steps": 4,
+            "answers": ["remembered"] * 4,
+        },
+        {
+            "name": "empty",
+            "specs": [],
+            "steps": 2,
+            "answers": ["remembered"] * 2,
+        },
+    ]
+
+    cases = []
+    for case in scenarios:
+        words = session_words(anchor, case["specs"])
+        core.words_data = words
+        state = core.new_session_state()
+        fake = FakeRandomModule(randoms)
+        original_module = core.random
+        core.random = fake
+        steps = []
+        try:
+            for step in range(case["steps"]):
+                now = anchor + step * 60
+                with FixedClock(now):
+                    word = core.session_pick(state, words)
+                if word is None:
+                    steps.append({
+                        "en": None,
+                        "draws": state["draws"],
+                        "repeats": state["repeats"],
+                        "planSize": len(state["plan"]),
+                    })
+                    break
+                entry = state["plan"][word["en"]]
+                steps.append({
+                    "en": word["en"],
+                    "seen": entry["seen"],
+                    "target": entry["target"],
+                    "next_at": entry["next_at"],
+                    "new": entry["new"],
+                    "draws": state["draws"],
+                    "repeats": state["repeats"],
+                    "hardRepeats": state["hard_repeats"],
+                    "planSize": len(state["plan"]),
+                    "proficiency": word["proficiency"],
+                    "stability": word["stability"],
+                })
+                result = case["answers"][step]
+                simulate_answer(word, result, now)
+                core.session_note_answer(state, word, result)
+        finally:
+            core.random = original_module
+        cases.append({
+            "name": case["name"],
+            "now0": anchor,
+            "answers": case["answers"][: case["steps"]],
+            "words": session_words(anchor, case["specs"]),
+            "steps": steps,
+        })
+
+    dump("session.json", {"u": randoms, "cases": cases})
+    check_session_invariants(cases)
+
+
+def check_session_invariants(cases: list[dict]) -> None:
+    """对基准做行为断言：两侧一致只是第一步，这里确认规则本身没跑偏。"""
+    problems = []
+
+    def appearances(case):
+        counts = {}
+        for step in case["steps"]:
+            if step["en"]:
+                counts[step["en"]] = counts.get(step["en"], 0) + 1
+        return counts
+
+    mixed = next(case for case in cases if case["name"] == "mixed")
+    counts = appearances(mixed)
+    for name in ("alpha", "bravo"):
+        if not 2 <= counts.get(name, 0) <= 3:
+            problems.append(f"新词 {name} 应出现 2~3 次，实际 {counts.get(name)}")
+    if counts.get("charlie") not in (2, 3):
+        problems.append(f"难记词 charlie 出现 {counts.get('charlie')} 次，应在 2~3 次之间")
+    if counts.get("echo") != 1:
+        problems.append(f"普通到期词 echo 应出现 1 次，实际 {counts.get('echo')}")
+    if counts.get("foxtrot"):
+        problems.append("已达标词 foxtrot 不应出现")
+
+    new_only = next(case for case in cases if case["name"] == "new-only")
+    for name, count in appearances(new_only).items():
+        if count != 2:
+            problems.append(f"new-only: {name} 出现 {count} 次，应为 2 次")
+
+    new_fails = next(case for case in cases if case["name"] == "new-fails")
+    if appearances(new_fails).get("india") != 3:
+        problems.append("新词连续答错后应出现 3 次")
+
+    for case in cases:
+        for name, count in appearances(case).items():
+            if count > core.SESSION_MAX_EXPOSURES:
+                problems.append(f"{case['name']}: {name} 出现 {count} 次，超过上限")
+
+    if problems:
+        print("本轮巩固行为断言失败：")
+        for item in problems:
+            print("  -", item)
+        raise SystemExit(1)
+    print("  本轮巩固行为断言通过")
+
+
 def main() -> None:
     words = load_words()
     print(f"基准数据来源：_backup_before_web/words.json（{len(words)} 个词）")
@@ -304,6 +531,7 @@ def main() -> None:
     probe_weekly()
     probe_normalize()
     probe_fuzz()
+    probe_session()
     print("完成。")
 
 

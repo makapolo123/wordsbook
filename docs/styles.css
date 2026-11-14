@@ -688,6 +688,13 @@ p {
   color: var(--accent);
 }
 
+/* 本轮巩固：比“到期复习”更轻，靠描边和浅底区分 */
+.pill--repeat {
+  background: var(--accent-pale);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent-soft);
+}
+
 .pill--idle,
 .pill--done {
   background: var(--track);

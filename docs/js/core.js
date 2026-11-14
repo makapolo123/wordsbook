@@ -28,6 +28,18 @@ export const MIN_REVIEW_GAP_HOURS = 12;
 export const LATENESS_CAP = 2.0;
 export const LATENESS_POWER = 2;
 
+// ===== 本轮巩固（会话内重复）参数 =====
+export const SESSION_REPEAT_ENABLED = true;
+export const SESSION_NEW_MIN_EXPOSURES = 2;
+export const SESSION_MAX_EXPOSURES = 3;
+export const SESSION_REPEAT_GAPS = [4, 9];
+export const SESSION_REPEAT_BUDGET_RATIO = 0.35;
+export const SESSION_HARD_PROFICIENCY = 65;
+export const SESSION_MID_PROFICIENCY = 80;
+export const SESSION_HARD_EASE = 1.8;
+export const SESSION_HARD_FAILS = 3;
+export const SESSION_MID_FAILS = 1;
+
 /** Python round(x, nd) 的精确复刻：按 IEEE754 的真实二进制值展开成十进制，再五取偶。 */
 export function pyRound(x, nd = 0) {
   if (!Number.isFinite(x) || x === 0) return x;
@@ -196,6 +208,150 @@ export function pickRandomWord(words, now = Date.now() / 1000, rand = Math.rando
   return pool[weightedIndex(weights, rand())];
 }
 
+// ===== 本轮巩固：会话内的重复抽取 =====
+// 时间调度（pickRandomWord）保持不变，这里只维护“本轮还要再见几面”的队列。
+// 队列只存活于本轮：app.session.state，不写入 words.json。
+
+/** 计划表用无原型对象，避免单词叫 "constructor" 时读到 Object.prototype 上的东西。 */
+const planGet = (plan, en) =>
+  Object.prototype.hasOwnProperty.call(plan, en) ? plan[en] : undefined;
+
+export function newSessionState() {
+  return { draws: 0, repeats: 0, hard_repeats: 0, plan: Object.create(null) };
+}
+
+/** 单词在本轮的目标出现次数：新词保底 2 次，越难记越多，封顶 SESSION_MAX_EXPOSURES。 */
+export function sessionTarget(word) {
+  if ((word.first_review ?? 0) === 0) {
+    return Math.min(SESSION_MAX_EXPOSURES, SESSION_NEW_MIN_EXPOSURES);
+  }
+  const proficiency = word.proficiency ?? MIN_PRO;
+  const fails = word.fail_count ?? 0;
+  const ease = word.ease ?? EASE_DEFAULT;
+  if (
+    proficiency < SESSION_HARD_PROFICIENCY ||
+    fails >= SESSION_HARD_FAILS ||
+    ease <= SESSION_HARD_EASE
+  ) {
+    return SESSION_MAX_EXPOSURES;
+  }
+  if (proficiency < SESSION_MID_PROFICIENCY || fails >= SESSION_MID_FAILS) return 2;
+  return 1;
+}
+
+/** 第 seen 次出现之后，距下一次巩固至少隔几个词。 */
+export function sessionRepeatGap(seen) {
+  const index = Math.min(Math.max(seen, 1), SESSION_REPEAT_GAPS.length) - 1;
+  return SESSION_REPEAT_GAPS[index];
+}
+
+export function sessionEntry(state, word) {
+  if (!word) return null;
+  const entry = planGet(state.plan, word.en);
+  return entry === undefined ? null : entry;
+}
+
+/**
+ * 从本轮计划里挑一个巩固词；没有就返回 null。
+ * 选择顺序：计划时点最早 → 熟练度最低 → 词库顺序，保证可复现、不消耗随机数。
+ * ignoreGap 只在“本轮已经没有别的到期词”时使用。
+ */
+function takeRepeat(state, words, ignoreBudget = false, ignoreGap = false) {
+  let best = null;
+  for (let index = 0; index < words.length; index += 1) {
+    const word = words[index];
+    const entry = planGet(state.plan, word.en);
+    if (!entry) continue;
+    if ((entry.seen ?? 0) >= (entry.target ?? 1)) continue;
+    if (!ignoreGap && (entry.next_at ?? 0) > state.draws) continue;
+    if ((word.proficiency ?? 0) >= STD_PRO) {
+      delete state.plan[word.en];
+      continue;
+    }
+    if (
+      best === null ||
+      entry.next_at < best.entry.next_at ||
+      (entry.next_at === best.entry.next_at &&
+        (word.proficiency ?? MIN_PRO) < (best.word.proficiency ?? MIN_PRO))
+    ) {
+      best = { entry, word };
+    }
+  }
+  if (best === null) return null;
+
+  const entry = best.entry;
+  if (!entry.new && !ignoreBudget && SESSION_REPEAT_BUDGET_RATIO > 0) {
+    const allowed = Math.max(2, Math.trunc(SESSION_REPEAT_BUDGET_RATIO * state.draws));
+    if (state.hard_repeats + 1 > allowed) return null;
+  }
+
+  state.repeats += 1;
+  if (!entry.new) state.hard_repeats += 1;
+  return best.word;
+}
+
+/**
+ * 本轮取词：优先消化到点的巩固词，其次走原来的时间调度。
+ * 原调度抽不到词但队列里还有巩固词时兜底抽巩固词，
+ * 这样即使只导入两个新词，也能在一轮里各复习两次。
+ */
+export function sessionPick(state, words, now = Date.now() / 1000, rand = Math.random) {
+  if (!SESSION_REPEAT_ENABLED) return pickRandomWord(words, now, rand);
+
+  let word = takeRepeat(state, words);
+  if (!word) word = pickRandomWord(words, now, rand);
+  if (!word) word = takeRepeat(state, words, false, true);
+  if (!word) return null;
+
+  state.draws += 1;
+  let entry = planGet(state.plan, word.en);
+  if (!entry) {
+    entry = {
+      seen: 0,
+      target: sessionTarget(word),
+      next_at: 0,
+      new: (word.first_review ?? 0) === 0,
+    };
+    state.plan[word.en] = entry;
+  }
+  entry.seen += 1;
+  return word;
+}
+
+/**
+ * 答题后更新本轮计划。只决定“本轮还要不要再出现”，
+ * 不改记忆强度/熟练度——短期重复答对不能当作长期记住的证据。
+ */
+export function sessionNoteAnswer(state, word, result) {
+  const en = word.en;
+  let entry = planGet(state.plan, en);
+  if (!entry) {
+    entry = {
+      seen: 1,
+      target: sessionTarget(word),
+      next_at: 0,
+      new: (word.first_review ?? 0) === 0,
+    };
+    state.plan[en] = entry;
+  }
+
+  if (result === 'marked_remembered' || (word.proficiency ?? 0) >= STD_PRO) {
+    delete state.plan[en];
+    return;
+  }
+
+  let target = entry.target ?? 1;
+  if (result === 'forgotten') target += 1;
+  entry.target = Math.min(SESSION_MAX_EXPOSURES, target);
+
+  const seen = entry.seen ?? 0;
+  if (seen >= entry.target) {
+    delete state.plan[en];
+    return;
+  }
+  entry.next_at = state.draws + sessionRepeatGap(seen);
+}
+
 /** 最近一个未达标词的到期等待秒数；没有未达标词返回 null。 */
 export function nextDueSeconds(words, now = Date.now() / 1000) {
   let best = null;
@@ -272,26 +428,42 @@ const stripChars = (text) =>
 
 const keepPosWithMeaning = (part) => part.replace(POS_PREFIX, '$1\u00A0');
 
-/** 把释义按词性拆成多行，返回行数组。 */
+/** 把释义按词性拆成多行，返回行数组。分组规则与 Python 的 _format_definition 一致。 */
 export function formatDefinition(text) {
   const source = String(text ?? '').trim();
   const marks = [];
   POS_MARKER.lastIndex = 0;
   let match = POS_MARKER.exec(source);
   while (match) {
-    marks.push(match.index + match[1].length);
-    POS_MARKER.lastIndex = match.index + match[1].length + 1;
+    const start = match.index + match[1].length;
+    marks.push({ start, end: start + match[2].length });
+    POS_MARKER.lastIndex = start + match[2].length;
     match = POS_MARKER.exec(source);
   }
   if (marks.length <= 1) return [keepPosWithMeaning(source)];
 
+  // 相邻词性之间只有分隔符时合并成一组（例如 “n./vt.”），否则各成一行
+  const groups = [];
+  let current = [marks[0]];
+  for (let index = 1; index < marks.length; index += 1) {
+    const between = source.slice(current[current.length - 1].end, marks[index].start);
+    if (/^[ /；;，,]*$/.test(between)) {
+      current.push(marks[index]);
+    } else {
+      groups.push(current);
+      current = [marks[index]];
+    }
+  }
+  groups.push(current);
+
   const parts = [];
-  const head = stripChars(source.slice(0, marks[0]));
+  const head = stripChars(source.slice(0, marks[0].start));
   if (head) parts.push(head);
-  marks.forEach((start, index) => {
-    const end = index + 1 < marks.length ? marks[index + 1] : source.length;
-    const part = stripChars(source.slice(start, end));
-    if (part) parts.push(keepPosWithMeaning(part));
+  groups.forEach((group, index) => {
+    const end = index + 1 < groups.length ? groups[index + 1][0].start : source.length;
+    const posLabels = group.map((mark) => source.slice(mark.start, mark.end)).join('/');
+    const meaning = stripChars(source.slice(group[group.length - 1].end, end));
+    parts.push(meaning ? `${posLabels}\u00A0${meaning}` : posLabels);
   });
   return parts;
 }

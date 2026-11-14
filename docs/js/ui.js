@@ -394,9 +394,14 @@ export function exportSheetHtml() {
 export function renderSessionLabel(session) {
   const node = $('#review-session');
   if (!node) return;
-  node.textContent = session.reviewCount
-    ? `本轮已复习 ${session.reviewCount} 次 · 记住 ${session.rememberedCount} 次`
-    : '按记忆强度自动安排，随时可以结束';
+  if (!session.reviewCount) {
+    node.textContent = '按记忆强度自动安排，随时可以结束';
+    return;
+  }
+  let text = `本轮已复习 ${session.reviewCount} 次 · 记住 ${session.rememberedCount} 次`;
+  const repeats = session.state?.repeats ?? 0;
+  if (repeats) text += ` · 巩固 ${repeats} 次`;
+  node.textContent = text;
 }
 
 const SWIPE_ICON =
@@ -508,15 +513,24 @@ function attachSwipeReview(card, getAction) {
   });
 }
 
-export function renderReviewQuestion({ word, revealed, processed, handlers }) {
+export function renderReviewQuestion({ word, revealed, processed, isRepeat, handlers }) {
   const host = $('#review-body');
   if (!host) return;
 
   const isNew = (word.stability ?? 0) <= 0;
+  let pill = 'pill--due';
+  let pillText = '到期复习';
+  if (isRepeat) {
+    pill = 'pill--repeat';
+    pillText = '巩固';
+  } else if (isNew) {
+    pill = 'pill--new';
+    pillText = '新词';
+  }
   const definition = core.formatDefinition(word.cn);
   const meta = `
     <div class="review__meta">
-      <span class="pill ${isNew ? 'pill--new' : 'pill--due'}">${isNew ? '新词' : '到期复习'}</span>
+      <span class="pill ${pill}">${pillText}</span>
       <span class="review__pro">熟练度 ${word.proficiency ?? core.MIN_PRO}</span>
     </div>`;
 

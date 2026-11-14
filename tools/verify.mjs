@@ -182,6 +182,63 @@ for (const [index, item] of fuzz.cases.entries()) {
   expect('模糊', `#${index}.proficiency`, core.proficiencyFromStability(out[0]), item.p);
 }
 
+// ---------- 11. 本轮巩固 ----------
+function simulateAnswer(word, result, at) {
+  if (result === 'marked_remembered') {
+    word.proficiency = 101;
+  } else {
+    [word.stability, word.ease] = core.applyAnswer(
+      word.stability ?? 0,
+      word.ease ?? core.EASE_DEFAULT,
+      result === 'remembered',
+    );
+    word.proficiency = core.proficiencyFromStability(word.stability);
+  }
+  if ((word.first_review ?? 0) === 0) word.first_review = at;
+  if (result === 'forgotten') word.fail_count = (word.fail_count ?? 0) + 1;
+  else word.success_count = (word.success_count ?? 0) + 1;
+  word.last_review = at;
+}
+
+const session = load('session.json');
+for (const item of session.cases) {
+  const list = item.words.map((word) => ({ ...word }));
+  const state = core.newSessionState();
+  const rand = makeRand(session.u);
+  const steps = [];
+  for (let step = 0; step < item.answers.length; step += 1) {
+    const at = item.now0 + step * 60;
+    const word = core.sessionPick(state, list, at, rand);
+    if (!word) {
+      steps.push({
+        en: null,
+        draws: state.draws,
+        repeats: state.repeats,
+        planSize: Object.keys(state.plan).length,
+      });
+      break;
+    }
+    const entry = core.sessionEntry(state, word);
+    steps.push({
+      en: word.en,
+      seen: entry.seen,
+      target: entry.target,
+      next_at: entry.next_at,
+      new: entry.new,
+      draws: state.draws,
+      repeats: state.repeats,
+      hardRepeats: state.hard_repeats,
+      planSize: Object.keys(state.plan).length,
+      proficiency: word.proficiency,
+      stability: word.stability,
+    });
+    const result = item.answers[step];
+    simulateAnswer(word, result, at);
+    core.sessionNoteAnswer(state, word, result);
+  }
+  expect('本轮巩固', `${item.name} 抽取序列`, steps, item.steps);
+}
+
 // ---------- 汇总 ----------
 const total = checks;
 if (failures === 0) {

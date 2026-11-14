@@ -349,7 +349,15 @@ export async function appendSessionBlock(block) {
 }
 
 /** 与桌面版 statistic_data() 完全一致的文本块。 */
-export function buildSessionBlock(startTime, endTime, reviewCounts, rememberCounts, reviewWords, newWords) {
+export function buildSessionBlock(
+  startTime,
+  endTime,
+  reviewCounts,
+  rememberCounts,
+  reviewWords,
+  newWords,
+  repeatCounts = 0,
+) {
   const start = new Date(startTime * 1000);
   const total = Math.max(0, Math.round(endTime - startTime));
   const hours = Math.trunc(total / 3600);
@@ -361,6 +369,7 @@ export function buildSessionBlock(startTime, endTime, reviewCounts, rememberCoun
     `用时：${hours}:${minutes}:${seconds}\n` +
     `复习单词次数：${reviewCounts}\n` +
     `记住单词次数：${rememberCounts}\n` +
+    `巩固复习次数：${repeatCounts}\n` +
     `复习单词数：${reviewWords}\n` +
     `新单词数：${newWords}\n` +
     `正确率：${accuracy}%\n`

@@ -36,6 +36,18 @@ MIN_REVIEW_GAP_HOURS = 12        # 同一个词两次抽取的最小间隔，避
 LATENESS_CAP = 2.0               # 逾期倍数上限：超过后权重不再增加，保证到期词公平轮换
 LATENESS_POWER = 2               # 逾期倍数权重指数，越大越偏向逾期久的词
 
+# ===== 本轮巩固（会话内重复）参数 =====
+SESSION_REPEAT_ENABLED = True        # 是否启用本轮巩固
+SESSION_NEW_MIN_EXPOSURES = 2        # 新词本轮至少出现次数（含首次），答错还能再加
+SESSION_MAX_EXPOSURES = 3            # 单个单词本轮最多出现次数（封顶）
+SESSION_REPEAT_GAPS = (4, 9)         # 第 1、2 次巩固前至少隔几个词
+SESSION_REPEAT_BUDGET_RATIO = 0.35   # 非新词巩固次数占本轮抽取次数的上限
+SESSION_HARD_PROFICIENCY = 65        # 熟练度低于该值视为难记词
+SESSION_MID_PROFICIENCY = 80         # 熟练度低于该值按中等难度处理
+SESSION_HARD_EASE = 1.8              # 增长系数不高于该值视为难记词
+SESSION_HARD_FAILS = 3               # 答错次数达到该值视为难记词
+SESSION_MID_FAILS = 1                # 答错过至少一次按中等难度处理
+
 words_data = []    # 单词列表
 
 # 保存单词
@@ -303,6 +315,145 @@ def pick_random_word(now=None):
                    for word in pool]
     return random.choices(pool, weights=weights, k=1)[0]
 
+# ===== 本轮巩固：会话内的重复抽取 =====
+# 时间调度（pick_random_word）保持不变：一轮里每个词仍然只按记忆强度到期才算数。
+# 这里额外维护一份“本轮还要再见几面”的队列，只存在于内存，结束本轮就丢弃，不写存档。
+# 于是新词和难记词能在一轮内多出现 1~2 次，普通词和熟练词仍然只出现一次。
+
+def new_session_state():
+    """一轮复习的会话状态：只存活于本轮，不写入 words.json。"""
+    return {
+        "draws": 0,         # 本轮已抽取次数
+        "repeats": 0,       # 其中巩固抽取次数（包含新词）
+        "hard_repeats": 0,  # 其中非新词巩固次数，用于配额
+        "plan": {},         # 英文 -> {seen, target, next_at, new}
+    }
+
+def session_target(word):
+    """单词在本轮的目标出现次数：新词保底 2 次，越难记越多，封顶 SESSION_MAX_EXPOSURES。"""
+    if word.get("first_review", 0) == 0:
+        return min(SESSION_MAX_EXPOSURES, SESSION_NEW_MIN_EXPOSURES)
+    proficiency = word.get("proficiency", MIN_PRO)
+    fails = word.get("fail_count", 0)
+    ease = word.get("ease", EASE_DEFAULT)
+    if (proficiency < SESSION_HARD_PROFICIENCY
+            or fails >= SESSION_HARD_FAILS
+            or ease <= SESSION_HARD_EASE):
+        return SESSION_MAX_EXPOSURES
+    if proficiency < SESSION_MID_PROFICIENCY or fails >= SESSION_MID_FAILS:
+        return 2
+    return 1
+
+def session_repeat_gap(seen):
+    """第 seen 次出现之后，距下一次巩固至少隔几个词。"""
+    index = min(max(seen, 1), len(SESSION_REPEAT_GAPS)) - 1
+    return SESSION_REPEAT_GAPS[index]
+
+def session_entry(state, word):
+    """取某个词的本轮计划；不在计划里返回 None。"""
+    if not word:
+        return None
+    return state["plan"].get(word.get("en"))
+
+def _session_take_repeat(state, words, ignore_budget=False, ignore_gap=False):
+    """从本轮计划里挑一个巩固词；没有就返回 None。
+    选择顺序：计划时点最早 → 熟练度最低 → 词库顺序，保证可复现、不消耗随机数。
+    ignore_gap 只在“本轮已经没有别的到期词”时使用：队列里只剩巩固词时，
+    再等间隔也等不到别的词，不如直接把该复习的补完。"""
+    best = None
+    for index, word in enumerate(words):
+        entry = state["plan"].get(word.get("en"))
+        if entry is None:
+            continue
+        if entry.get("seen", 0) >= entry.get("target", 1):
+            continue
+        if not ignore_gap and entry.get("next_at", 0) > state["draws"]:
+            continue
+        if word.get("proficiency", 0) >= STD_PRO:
+            state["plan"].pop(word.get("en"), None)
+            continue
+        if best is None:
+            best = (entry, word, index)
+            continue
+        best_entry, best_word, best_index = best
+        if (entry["next_at"], word.get("proficiency", MIN_PRO), index) < (
+                best_entry["next_at"], best_word.get("proficiency", MIN_PRO), best_index):
+            best = (entry, word, index)
+    if best is None:
+        return None
+
+    entry = best[0]
+    if not entry.get("new") and not ignore_budget and SESSION_REPEAT_BUDGET_RATIO > 0:
+        allowed = max(2, int(SESSION_REPEAT_BUDGET_RATIO * state["draws"]))
+        if state["hard_repeats"] + 1 > allowed:
+            return None
+
+    state["repeats"] += 1
+    if not entry.get("new"):
+        state["hard_repeats"] += 1
+    return best[1]
+
+def session_pick(state, words=None, now=None):
+    """本轮取词：优先消化到点的巩固词，其次走原来的时间调度。
+    原调度抽不到词（没有到期词）但队列里还有巩固词时兜底抽巩固词，
+    这样即使只导入两个新词，也能在一轮里各复习两次。"""
+    if not SESSION_REPEAT_ENABLED:
+        return pick_random_word(now)
+    if words is None:
+        words = words_data
+    if now is None:
+        now = time.time()
+
+    word = _session_take_repeat(state, words)
+    if word is None:
+        word = pick_random_word(now)
+    if word is None:
+        word = _session_take_repeat(state, words, ignore_gap=True)
+    if word is None:
+        return None
+
+    state["draws"] += 1
+    entry = state["plan"].get(word["en"])
+    if entry is None:
+        entry = {
+            "seen": 0,
+            "target": session_target(word),
+            "next_at": 0,
+            "new": word.get("first_review", 0) == 0,
+        }
+        state["plan"][word["en"]] = entry
+    entry["seen"] += 1
+    return word
+
+def session_note_answer(state, word, result):
+    """答题后更新本轮计划。只决定“本轮还要不要再出现”，
+    不改记忆强度/熟练度——短期重复答对不能当作长期记住的证据。"""
+    en = word["en"]
+    entry = state["plan"].get(en)
+    if entry is None:
+        entry = {
+            "seen": 1,
+            "target": session_target(word),
+            "next_at": 0,
+            "new": word.get("first_review", 0) == 0,
+        }
+        state["plan"][en] = entry
+
+    if result == "marked_remembered" or word.get("proficiency", 0) >= STD_PRO:
+        state["plan"].pop(en, None)
+        return
+
+    target = entry.get("target", 1)
+    if result == "forgotten":
+        target += 1
+    entry["target"] = min(SESSION_MAX_EXPOSURES, target)
+
+    seen = entry.get("seen", 0)
+    if seen >= entry["target"]:
+        state["plan"].pop(en, None)
+        return
+    entry["next_at"] = state["draws"] + session_repeat_gap(seen)
+
 # 距离最近的单词到期还有多少秒
 def next_due_seconds(now=None):
     """返回最近一个未达标词的到期等待时间（秒）；没有未达标词时返回 None"""
@@ -339,7 +490,7 @@ def all_word_finish():
     return True
 
 # 记录每次复习的数据
-def statistic_data(start_time, end_time, review_counts, remember_counts, review_words, new_words):
+def statistic_data(start_time, end_time, review_counts, remember_counts, review_words, new_words, repeat_counts=0):
     with open(STATISTIC_FILE, "a", encoding="utf-8") as f:
         start_text = datetime.fromtimestamp(start_time).strftime("%Y-%m-%d %H:%M:%S")
         f.write(f"\n复习时间：{start_text}\n")
@@ -347,6 +498,7 @@ def statistic_data(start_time, end_time, review_counts, remember_counts, review_
         f.write(f"用时：{int(review_time // 3600)}:{int(review_time % 3600 // 60)}:{int(review_time % 60)}\n")
         f.write(f"复习单词次数：{review_counts}\n")
         f.write(f"记住单词次数：{remember_counts}\n")
+        f.write(f"巩固复习次数：{repeat_counts}\n")
         f.write(f"复习单词数：{len(review_words)}\n")
         f.write(f"新单词数：{new_words}\n")
         f.write(f"正确率：{round((remember_counts / review_counts)*100, 2)}%\n")
@@ -371,6 +523,7 @@ def start_review():
     new_words = 0        # 新单词数
     start_flag = False   # 开始复习标志
     review_words = set() # 复习的单词
+    session = new_session_state()   # 本轮巩固队列（只在内存里）
 
     if len(words_data) == 0:
         print("暂无单词，请先导入单词！")
@@ -388,8 +541,8 @@ def start_review():
             start_time = time.time()  # 复习开始时间
         start_flag = True
         
-        # 抽取单词：只抽已经到期的词
-        current_word = pick_random_word()
+        # 抽取单词：优先本轮到点的巩固词，其次才是到期词
+        current_word = session_pick(session)
         if current_word is None:
             wait = next_due_seconds()
             if wait is None:
@@ -468,13 +621,15 @@ def start_review():
         review_counts += 1
         review_words.add(current_word["en"])
         current_word["last_review"] = now
+        # 更新本轮巩固队列：答错会让这个词本轮再出现一次，答对且达标则不再排
+        session_note_answer(session, current_word, result)
         final_proficiency = current_word["proficiency"]
         word_record([word_record_time, current_word["en"], current_word["cn"], initial_proficiency, final_proficiency, result])
         save_words()
 
     # 只要本次复习过单词就写入统计，无论正常退出、全部达标还是没有到期词
     if review_counts:
-        statistic_data(start_time, time.time(), review_counts, remember_counts, review_words, new_words)
+        statistic_data(start_time, time.time(), review_counts, remember_counts, review_words, new_words, session["repeats"])
 
 # 主菜单函数
 def main_menu():
